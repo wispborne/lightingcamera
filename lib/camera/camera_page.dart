@@ -1,8 +1,8 @@
-import 'dart:typed_data';
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img_lib;
+import 'package:lightingcamera/camera/gallery_page.dart';
+import 'package:lightingcamera/camera/image_cache_manager.dart';
 
 class CameraPage extends StatefulWidget {
   const CameraPage({super.key});
@@ -16,8 +16,9 @@ class _CameraPageState extends State<CameraPage> {
   Future<void>? _initializeControllerFuture;
   List<CameraDescription>? _cameras;
   bool isRecording = false;
-  List<CameraImage> capturedImages = [];
-  int bufferSize = 10;
+
+  final ImageCacheManager _cacheManager = ImageCacheManager();
+
   img_lib.Image? displayImage;
   bool _isConverting = false;
   CameraImage? _latestImageToConvert;
@@ -58,7 +59,6 @@ class _CameraPageState extends State<CameraPage> {
           // Handle other errors here.
           break;
       }
-
       return;
     }
 
@@ -67,6 +67,9 @@ class _CameraPageState extends State<CameraPage> {
     }
 
     setState(() {});
+
+    // Start recording immediately after initialization
+    _startRecording();
   }
 
   @override
@@ -81,7 +84,6 @@ class _CameraPageState extends State<CameraPage> {
       future: _initializeControllerFuture,
       builder: (context, snapshot) {
         if (controller != null && _cameras != null) {
-          // If the Future is complete, display the preview.
           return Stack(
             children: [
               CameraPreview(controller!),
@@ -95,66 +97,101 @@ class _CameraPageState extends State<CameraPage> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       padding: const EdgeInsets.all(8),
-                      child: Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Image Count: ${capturedImages.length} | FPS: $_fps',
+                            'Caching the last ${_cacheManager.getCacheDurationSeconds().toStringAsFixed(1)} seconds',
+                            style: const TextStyle(color: Colors.white),
                           ),
-
-                          Spacer(),
-                          ElevatedButton(
-                            onPressed: () {
-                              if (isRecording) {
-                                _stopRecording();
-                              } else {
-                                _startRecording();
-                              }
-                            },
-                            child: Text(isRecording ? "Stop" : "Start"),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Image Count: ${_cacheManager.cacheSize} | FPS: $_fps | Cache: ${_cacheManager.getCacheMemoryUsageMB().toStringAsFixed(1)}MB',
                           ),
+                          // IconButton(
+                          //   onPressed: () {
+                          //     setState(() {
+                          //       showLivePreview = !showLivePreview;
+                          //     });
+                          //   },
+                          //   icon: Icon(
+                          //     showLivePreview
+                          //         ? Icons.image_not_supported
+                          //         : Icons.image,
+                          //     color: Colors.white,
+                          //   ),
+                          // ),
                         ],
                       ),
                     ),
                   ),
-                  Spacer(),
+                  const Spacer(),
+                  // Camera shutter button section
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 32),
+                    padding: const EdgeInsets.only(bottom: 50),
                     child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
-                        Spacer(),
-                        if (displayImage !=
-                            null) // Check if displayImage is available
-                          Image.memory(
-                            // Encode to PNG
-                            Uint8List.fromList(
-                              img_lib.encodePng(displayImage!),
+                        const Spacer(),
+                        // Shutter button
+                        GestureDetector(
+                          onTap: _onShutterPressed,
+                          child: Container(
+                            width: 80,
+                            height: 80,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white,
+                              border: Border.all(color: Colors.grey, width: 3),
                             ),
-                            // Avoids flicker when image updates
-                            gaplessPlayback: true,
-                            width: 120,
-                            // height: 200,
-                          )
-                        else if (capturedImages.isNotEmpty)
-                          // You might want a placeholder or a loading indicator
-                          // while the first image is being processed.
-                          const Text("Processing first image..."),
-                        Spacer(),
-                        Padding(
-                          padding: const EdgeInsets.only(right: 16),
-                          child: IconButton(
-                            onPressed: () {
-                              setState(() {
-                                showLivePreview = !showLivePreview;
-                              });
-                            },
-                            icon: Icon(
-                              showLivePreview
-                                  ? Icons.image_not_supported
-                                  : Icons.image,
+                            child: Container(
+                              margin: const EdgeInsets.all(8),
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                         ),
+                        Spacer(),
+                        // Live preview thumbnail
+                        // Container(
+                        //   width: 80,
+                        //   height: 80,
+                        //   decoration: BoxDecoration(
+                        //     borderRadius: BorderRadius.circular(8),
+                        //     border: Border.all(
+                        //       color: Colors.white,
+                        //       width: 2,
+                        //     ),
+                        //   ),
+                        //   child: ClipRRect(
+                        //     borderRadius: BorderRadius.circular(6),
+                        //     child: displayImage != null
+                        //         ? Image.memory(
+                        //             Uint8List.fromList(
+                        //               img_lib.encodePng(displayImage!),
+                        //             ),
+                        //             gaplessPlayback: true,
+                        //             fit: BoxFit.cover,
+                        //           )
+                        //         : _cacheManager.cacheSize > 0
+                        //             ? const Center(
+                        //                 child: Icon(
+                        //                   Icons.image,
+                        //                   color: Colors.white,
+                        //                   size: 30,
+                        //                 ),
+                        //               )
+                        //             : const Center(
+                        //                 child: Icon(
+                        //                   Icons.camera_alt,
+                        //                   color: Colors.white,
+                        //                   size: 30,
+                        //                 ),
+                        //               ),
+                        //   ),
+                        // ),
                       ],
                     ),
                   ),
@@ -170,21 +207,43 @@ class _CameraPageState extends State<CameraPage> {
     );
   }
 
+  void _onShutterPressed() {
+    if (_cacheManager.cacheSize > 0) {
+      _openGallery();
+    }
+  }
+
+  void _openGallery() {
+    if (_cacheManager.cacheSize == 0) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder:
+            (context) => GalleryPage(
+              images: _cacheManager.getCachedImages(),
+              onBack: () {
+                // Clear cache when returning from gallery
+                _cacheManager.clearCache();
+                Navigator.of(context).pop();
+                setState(() {}); // Refresh UI to show updated cache size
+              },
+            ),
+      ),
+    );
+  }
+
   void _startRecording() async {
     if (controller == null || !controller!.value.isInitialized) return;
 
     await controller!.startImageStream((CameraImage image) async {
       if (!mounted) return;
 
-      // Always add the incoming image to the buffer
+      // Add image to cache manager
+      _cacheManager.addImage(image);
+      _imagesCapturedLastSecond++;
+
       if (mounted) {
-        setState(() {
-          capturedImages.add(image);
-          _imagesCapturedLastSecond++; // Increment counter for FPS calculation
-          while (capturedImages.length > bufferSize) {
-            capturedImages.removeAt(0);
-          }
-        });
+        setState(() {}); // Update UI with new cache size
       }
 
       // Store the latest image for potential conversion
@@ -201,14 +260,14 @@ class _CameraPageState extends State<CameraPage> {
 
         if (imageToProcess != null) {
           // Perform conversion
-          img_lib.Image? convertedImage = _convertCameraImage(imageToProcess);
-
-          if (!mounted) return;
-          setState(() {
-            if (convertedImage != null) {
-              displayImage = convertedImage;
-            }
-          });
+          // img_lib.Image? convertedImage = _convertCameraImage(imageToProcess);
+          //
+          // if (!mounted) return;
+          // setState(() {
+          //   if (convertedImage != null) {
+          //     displayImage = convertedImage;
+          //   }
+          // });
         }
         _isConverting = false; // Ready for next conversion
       }
