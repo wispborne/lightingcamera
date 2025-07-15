@@ -103,8 +103,19 @@ class CameraPageState extends State<CameraPage> with RouteAware {
     // Obtain a list of the available cameras on the device.
     _cameras = await availableCameras();
 
-    // Get a specific camera from the list of available cameras.
-    controller = CameraController(_cameras![0], ResolutionPreset.high);
+    // Find the main back camera from the list of available cameras.
+    CameraDescription? backCamera;
+    for (final camera in _cameras!) {
+      if (camera.lensDirection == CameraLensDirection.back) {
+        backCamera = camera;
+        break;
+      }
+    }
+
+    // If no back camera is found, fall back to the first available camera
+    final selectedCamera = backCamera ?? _cameras![0];
+
+    controller = CameraController(selectedCamera, ResolutionPreset.high);
 
     try {
       await controller?.initialize();
@@ -251,7 +262,11 @@ class CameraPageState extends State<CameraPage> with RouteAware {
         // Get the actual device orientation
         DeviceOrientation orientation = await _getDeviceOrientation();
 
-        _cacheManager.addImage(image, orientation);
+        _cacheManager.addImage(
+          image,
+          orientation,
+          controller!.description.lensDirection,
+        );
         _imagesCapturedLastSecond++;
 
         if (mounted) {

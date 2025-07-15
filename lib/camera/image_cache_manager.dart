@@ -7,12 +7,14 @@ class ImageWithMetadata {
   final DateTime timestamp;
   final int sequenceNumber;
   final DeviceOrientation orientation;
+  final CameraLensDirection lensDirection;
 
   ImageWithMetadata({
     required this.image,
     required this.timestamp,
     required this.sequenceNumber,
     required this.orientation,
+    required this.lensDirection,
   });
 
   /// Get the memory usage of this image in bytes
@@ -37,12 +39,17 @@ class ImageCacheManager {
   int _sequenceCounter = 0;
 
   /// Add a new image to the cache, removing oldest if necessary
-  void addImage(CameraImage image, DeviceOrientation orientation) {
+  void addImage(
+    CameraImage image,
+    DeviceOrientation orientation,
+    CameraLensDirection lensDirection,
+  ) {
     final imageWithMetadata = ImageWithMetadata(
       image: image,
       timestamp: DateTime.now(),
       sequenceNumber: _sequenceCounter++,
       orientation: orientation,
+      lensDirection: lensDirection,
     );
 
     _cachedImages.add(imageWithMetadata);
