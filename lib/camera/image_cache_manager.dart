@@ -1,17 +1,18 @@
-import 'dart:typed_data';
 import 'package:camera/camera.dart';
-import 'package:image/image.dart' as img_lib;
+import 'package:flutter/services.dart';
 
 /// Wrapper class for CameraImage that includes timestamp and other metadata
-class TimestampedCameraImage {
+class ImageWithMetadata {
   final CameraImage image;
   final DateTime timestamp;
   final int sequenceNumber;
+  final DeviceOrientation orientation;
 
-  TimestampedCameraImage({
+  ImageWithMetadata({
     required this.image,
     required this.timestamp,
     required this.sequenceNumber,
+    required this.orientation,
   });
 
   /// Get the memory usage of this image in bytes
@@ -26,23 +27,26 @@ class TimestampedCameraImage {
 
 class ImageCacheManager {
   static final ImageCacheManager _instance = ImageCacheManager._internal();
+
   factory ImageCacheManager() => _instance;
+
   ImageCacheManager._internal();
 
-  final List<TimestampedCameraImage> _cachedImages = [];
+  final List<ImageWithMetadata> _cachedImages = [];
   final int _maxCacheSize = 100;
   int _sequenceCounter = 0;
 
   /// Add a new image to the cache, removing oldest if necessary
-  void addImage(CameraImage image) {
-    final timestampedImage = TimestampedCameraImage(
+  void addImage(CameraImage image, DeviceOrientation orientation) {
+    final imageWithMetadata = ImageWithMetadata(
       image: image,
       timestamp: DateTime.now(),
       sequenceNumber: _sequenceCounter++,
+      orientation: orientation,
     );
-    
-    _cachedImages.add(timestampedImage);
-    
+
+    _cachedImages.add(imageWithMetadata);
+
     // Remove oldest images if we exceed the limit
     while (_cachedImages.length > _maxCacheSize) {
       _cachedImages.removeAt(0);
@@ -55,7 +59,7 @@ class ImageCacheManager {
   }
 
   /// Get all timestamped images
-  List<TimestampedCameraImage> getTimestampedImages() {
+  List<ImageWithMetadata> getTimestampedImages() {
     return List.from(_cachedImages);
   }
 
@@ -69,14 +73,19 @@ class ImageCacheManager {
   int get cacheSize => _cachedImages.length;
 
   /// Get the latest image for preview
-  CameraImage? get latestImage => _cachedImages.isNotEmpty ? _cachedImages.last.image : null;
+  CameraImage? get latestImage =>
+      _cachedImages.isNotEmpty ? _cachedImages.last.image : null;
 
   /// Get the latest timestamped image
-  TimestampedCameraImage? get latestTimestampedImage => _cachedImages.isNotEmpty ? _cachedImages.last : null;
+  ImageWithMetadata? get latestTimestampedImage =>
+      _cachedImages.isNotEmpty ? _cachedImages.last : null;
 
   /// Calculate the approximate memory usage of the cache in bytes
   int getCacheMemoryUsage() {
-    return _cachedImages.fold(0, (total, timestamped) => total + timestamped.memoryUsage);
+    return _cachedImages.fold(
+      0,
+      (total, timestamped) => total + timestamped.memoryUsage,
+    );
   }
 
   /// Get cache memory usage in MB
@@ -87,24 +96,26 @@ class ImageCacheManager {
   /// Get the duration of cached images in seconds
   double getCacheDurationSeconds() {
     if (_cachedImages.isEmpty) return 0.0;
-    
+
     final oldestTimestamp = _cachedImages.first.timestamp;
     final newestTimestamp = _cachedImages.last.timestamp;
-    
+
     return newestTimestamp.difference(oldestTimestamp).inMilliseconds / 1000.0;
   }
 
   /// Get the average FPS of cached images
   double getAverageFPS() {
     if (_cachedImages.length < 2) return 0.0;
-    
+
     final duration = getCacheDurationSeconds();
     return duration > 0 ? (_cachedImages.length - 1) / duration : 0.0;
   }
 
   /// Get the oldest cached image timestamp
-  DateTime? get oldestImageTimestamp => _cachedImages.isNotEmpty ? _cachedImages.first.timestamp : null;
+  DateTime? get oldestImageTimestamp =>
+      _cachedImages.isNotEmpty ? _cachedImages.first.timestamp : null;
 
   /// Get the newest cached image timestamp
-  DateTime? get newestImageTimestamp => _cachedImages.isNotEmpty ? _cachedImages.last.timestamp : null;
+  DateTime? get newestImageTimestamp =>
+      _cachedImages.isNotEmpty ? _cachedImages.last.timestamp : null;
 }

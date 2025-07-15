@@ -1,5 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img_lib;
 import 'package:lightingcamera/camera/gallery_page.dart';
 import 'package:lightingcamera/camera/image_cache_manager.dart';
@@ -8,14 +9,15 @@ class CameraPage extends StatefulWidget {
   const CameraPage({super.key});
 
   @override
-  State<CameraPage> createState() => _CameraPageState();
+  State<CameraPage> createState() => CameraPageState();
 }
 
-class _CameraPageState extends State<CameraPage> {
+class CameraPageState extends State<CameraPage> with RouteAware {
   CameraController? controller;
   Future<void>? _initializeControllerFuture;
   List<CameraDescription>? _cameras;
   bool isRecording = false;
+  bool _isPageVisible = true;
 
   final ImageCacheManager _cacheManager = ImageCacheManager();
 
@@ -26,10 +28,66 @@ class _CameraPageState extends State<CameraPage> {
   int _fps = 0;
   bool showLivePreview = false;
 
+  static final RouteObserver<PageRoute> routeObserver =
+      RouteObserver<PageRoute>();
+
   @override
   void initState() {
     super.initState();
     _initializeControllerFuture = _initializeCamera();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      routeObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    controller?.dispose();
+    super.dispose();
+  }
+
+  // RouteAware methods
+  @override
+  void didPush() {
+    // Route was pushed onto navigator and is now topmost route
+    _isPageVisible = true;
+    if (!isRecording && controller != null && controller!.value.isInitialized) {
+      _startRecording();
+    }
+  }
+
+  @override
+  void didPopNext() {
+    // Covering route was popped off the navigator, this route is now topmost
+    _isPageVisible = true;
+    if (!isRecording && controller != null && controller!.value.isInitialized) {
+      _startRecording();
+    }
+  }
+
+  @override
+  void didPushNext() {
+    // Route was pushed on top of this route
+    _isPageVisible = false;
+    if (isRecording) {
+      _stopRecording();
+    }
+  }
+
+  @override
+  void didPop() {
+    // Route was popped off the navigator
+    _isPageVisible = false;
+    if (isRecording) {
+      _stopRecording();
+    }
   }
 
   Future<void> _initializeCamera() async {
@@ -68,14 +126,10 @@ class _CameraPageState extends State<CameraPage> {
 
     setState(() {});
 
-    // Start recording immediately after initialization
-    _startRecording();
-  }
-
-  @override
-  void dispose() {
-    controller?.dispose();
-    super.dispose();
+    // Start recording immediately after initialization if page is visible
+    if (_isPageVisible) {
+      _startRecording();
+    }
   }
 
   @override
@@ -107,20 +161,13 @@ class _CameraPageState extends State<CameraPage> {
                           const SizedBox(height: 4),
                           Text(
                             'Image Count: ${_cacheManager.cacheSize} | FPS: $_fps | Cache: ${_cacheManager.getCacheMemoryUsageMB().toStringAsFixed(1)}MB',
+                            style: const TextStyle(color: Colors.white),
                           ),
-                          // IconButton(
-                          //   onPressed: () {
-                          //     setState(() {
-                          //       showLivePreview = !showLivePreview;
-                          //     });
-                          //   },
-                          //   icon: Icon(
-                          //     showLivePreview
-                          //         ? Icons.image_not_supported
-                          //         : Icons.image,
-                          //     color: Colors.white,
-                          //   ),
-                          // ),
+                          if (!_isPageVisible || !isRecording)
+                            const Text(
+                              'Recording paused',
+                              style: TextStyle(color: Colors.orange),
+                            ),
                         ],
                       ),
                     ),
@@ -153,45 +200,7 @@ class _CameraPageState extends State<CameraPage> {
                             ),
                           ),
                         ),
-                        Spacer(),
-                        // Live preview thumbnail
-                        // Container(
-                        //   width: 80,
-                        //   height: 80,
-                        //   decoration: BoxDecoration(
-                        //     borderRadius: BorderRadius.circular(8),
-                        //     border: Border.all(
-                        //       color: Colors.white,
-                        //       width: 2,
-                        //     ),
-                        //   ),
-                        //   child: ClipRRect(
-                        //     borderRadius: BorderRadius.circular(6),
-                        //     child: displayImage != null
-                        //         ? Image.memory(
-                        //             Uint8List.fromList(
-                        //               img_lib.encodePng(displayImage!),
-                        //             ),
-                        //             gaplessPlayback: true,
-                        //             fit: BoxFit.cover,
-                        //           )
-                        //         : _cacheManager.cacheSize > 0
-                        //             ? const Center(
-                        //                 child: Icon(
-                        //                   Icons.image,
-                        //                   color: Colors.white,
-                        //                   size: 30,
-                        //                 ),
-                        //               )
-                        //             : const Center(
-                        //                 child: Icon(
-                        //                   Icons.camera_alt,
-                        //                   color: Colors.white,
-                        //                   size: 30,
-                        //                 ),
-                        //               ),
-                        //   ),
-                        // ),
+                        const Spacer(),
                       ],
                     ),
                   ),
@@ -220,7 +229,7 @@ class _CameraPageState extends State<CameraPage> {
       MaterialPageRoute(
         builder:
             (context) => GalleryPage(
-              images: _cacheManager.getCachedImages(),
+              images: _cacheManager.getTimestampedImages(),
               onBack: () {
                 // Clear cache when returning from gallery
                 _cacheManager.clearCache();
@@ -235,110 +244,55 @@ class _CameraPageState extends State<CameraPage> {
   void _startRecording() async {
     if (controller == null || !controller!.value.isInitialized) return;
 
-    await controller!.startImageStream((CameraImage image) async {
-      if (!mounted) return;
+    try {
+      await controller!.startImageStream((CameraImage image) async {
+        if (!mounted) return;
 
-      // Add image to cache manager
-      _cacheManager.addImage(image);
-      _imagesCapturedLastSecond++;
+        // Get the actual device orientation
+        DeviceOrientation orientation = await _getDeviceOrientation();
 
-      if (mounted) {
-        setState(() {}); // Update UI with new cache size
-      }
+        _cacheManager.addImage(image, orientation);
+        _imagesCapturedLastSecond++;
 
-      // Store the latest image for potential conversion
-      _latestImageToConvert = image;
-
-      // This cuts FPS on PC from 20 fps to 14.
-      // If not currently converting, start a new conversion for the latest image
-      if (showLivePreview && !_isConverting) {
-        _isConverting = true;
-        // Use the latest image available at the time of starting conversion
-        CameraImage? imageToProcess = _latestImageToConvert;
-        _latestImageToConvert =
-            null; // Clear it so we don't process it again if another comes in fast
-
-        if (imageToProcess != null) {
-          // Perform conversion
-          // img_lib.Image? convertedImage = _convertCameraImage(imageToProcess);
-          //
-          // if (!mounted) return;
-          // setState(() {
-          //   if (convertedImage != null) {
-          //     displayImage = convertedImage;
-          //   }
-          // });
+        if (mounted) {
+          setState(() {}); // Update UI with new cache size
         }
-        _isConverting = false; // Ready for next conversion
-      }
-    });
-    setState(() {
-      isRecording = true;
-    });
+      });
+      setState(() {
+        isRecording = true;
+      });
+    } catch (e) {
+      print('Error starting recording: $e');
+    }
+  }
+
+  Future<DeviceOrientation> _getDeviceOrientation() async {
+    // Get the current system orientation
+    final List<DeviceOrientation> orientations = await SystemChannels.platform
+        .invokeMethod<List<dynamic>>('SystemChrome.getSystemUIOverlayStyle')
+        .then((dynamic result) => <DeviceOrientation>[]);
+
+    // Fallback to using MediaQuery with better mapping
+    switch (MediaQuery.orientationOf(context)) {
+      case Orientation.portrait:
+        // You might want to use device sensors here for more accurate detection
+        return DeviceOrientation.portraitUp;
+      case Orientation.landscape:
+        return DeviceOrientation.landscapeLeft;
+    }
   }
 
   void _stopRecording() async {
-    await controller!.stopImageStream();
-    setState(() {
-      isRecording = false;
-    });
-  }
+    if (controller == null || !controller!.value.isInitialized || !isRecording)
+      return;
 
-  // Helper function to convert CameraImage to image_lib.Image
-  // This is a simplified example and might need adjustments based on the image format
-  img_lib.Image? _convertCameraImage(CameraImage cameraImage) {
-    if (cameraImage.format.group == ImageFormatGroup.yuv420) {
-      // YUV420 conversion (common format)
-      // This is a basic YUV420 to RGB conversion.
-      // For more accurate and optimized conversion, especially for different YUV types,
-      // refer to the 'image' package documentation or more specialized image processing libraries.
-      final int width = cameraImage.width;
-      final int height = cameraImage.height;
-      final int uvRowStride = cameraImage.planes[1].bytesPerRow;
-      final int uvPixelStride = cameraImage.planes[1].bytesPerPixel!;
-
-      final yPlane = cameraImage.planes[0].bytes;
-      final uPlane = cameraImage.planes[1].bytes;
-      final vPlane = cameraImage.planes[2].bytes;
-
-      img_lib.Image image = img_lib.Image(width: width, height: height);
-
-      for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-          final int uvIndex =
-              uvPixelStride * (x / 2).floor() + uvRowStride * (y / 2).floor();
-          final int index = y * width + x;
-
-          final yp = yPlane[index];
-          final up = uPlane[uvIndex];
-          final vp = vPlane[uvIndex];
-
-          int r = (yp + vp * 1436 / 1024 - 179).round().clamp(0, 255);
-          int g = (yp - up * 46549 / 131072 + 44 - vp * 93604 / 131072 + 91)
-              .round()
-              .clamp(0, 255);
-          int b = (yp + up * 1814 / 1024 - 227).round().clamp(0, 255);
-
-          image.setPixelRgb(x, y, r, g, b);
-        }
-      }
-      return image;
-    } else if (cameraImage.format.group == ImageFormatGroup.bgra8888) {
-      // BGRA8888 to RGB conversion
-      final plane = cameraImage.planes[0];
-      return img_lib.Image.fromBytes(
-        width: cameraImage.width,
-        height: cameraImage.height,
-        bytes: plane.bytes.buffer,
-        format: img_lib.Format.uint8,
-        // Adjust if needed
-        rowStride: plane.bytesPerRow,
-        order: img_lib.ChannelOrder.bgra,
-      );
-    } else {
-      // Handle other formats or return null
-      print('Unsupported image format: ${cameraImage.format.group}');
-      return null;
+    try {
+      await controller!.stopImageStream();
+      setState(() {
+        isRecording = false;
+      });
+    } catch (e) {
+      print('Error stopping recording: $e');
     }
   }
 }
