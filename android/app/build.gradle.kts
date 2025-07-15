@@ -28,7 +28,29 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Wisp: For the native code
+        externalNativeBuild {
+            cmake {
+                cppFlags.add("-std=c++17")
+                arguments.add("-DANDROID_STL=c++_shared")
+            }
+        }
+
+        // Wisp: For the native code
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
+        }
     }
+
+    // Wisp: For the native code
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.29.0-rc1"
+        }
+    }
+
 
     buildTypes {
         release {

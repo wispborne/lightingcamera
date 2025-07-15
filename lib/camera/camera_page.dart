@@ -302,6 +302,8 @@ class CameraPageState extends State<CameraPage> with RouteAware {
       return;
 
     try {
+      await controller!.pausePreview();
+      await controller!.pauseVideoRecording();
       await controller!.stopImageStream();
       setState(() {
         isRecording = false;

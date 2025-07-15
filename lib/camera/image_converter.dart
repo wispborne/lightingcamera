@@ -1,6 +1,7 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
+import 'package:lightingcamera/native/yuv_converter_ffi.dart';
 
 import 'image_cache_manager.dart';
 
@@ -26,7 +27,7 @@ class ImageConverter {
     final cameraImage = imageWithMetadata.image;
 
     // Convert YUV to RGB
-    img.Image rgbImage = _convertYuvToRgb(cameraImage);
+    img.Image rgbImage = _convertYuvToRgbOptimized(cameraImage);
 
     // Apply rotation to match what CameraPreview shows
     // The rotation logic needs to account for both device orientation AND camera type
@@ -78,10 +79,50 @@ class ImageConverter {
     }
   }
 
+  // Optimized YUV to RGB conversion using native code
+  static img.Image _convertYuvToRgbOptimized(CameraImage cameraImage) {
+    final int width = cameraImage.width;
+    final int height = cameraImage.height;
+
+    final Uint8List yPlane = cameraImage.planes[0].bytes;
+    final Uint8List uPlane = cameraImage.planes[1].bytes;
+    final Uint8List vPlane = cameraImage.planes[2].bytes;
+
+    final int uvRowStride = cameraImage.planes[1].bytesPerRow;
+    final int uvPixelStride = cameraImage.planes[1].bytesPerPixel!;
+
+    // Use native FFI conversion
+    final Uint8List rgbData = YuvConverterFFI.convertYuvToRgb(
+      yPlane,
+      uPlane,
+      vPlane,
+      width,
+      height,
+      uvRowStride,
+      uvPixelStride,
+    );
+
+    // Create image from RGB data
+    final image = img.Image(width: width, height: height);
+
+    // Copy RGB data to image (optimized loop)
+    int rgbIndex = 0;
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final int r = rgbData[rgbIndex++];
+        final int g = rgbData[rgbIndex++];
+        final int b = rgbData[rgbIndex++];
+        image.setPixelRgb(x, y, r, g, b);
+      }
+    }
+
+    return image;
+  }
+
   /// Converts a [CameraImage] in YUV420 format to a `img.Image` in RGB format.
   ///
   /// Note: This is a pure Dart implementation and might be slow.
-  static img.Image _convertYuvToRgb(CameraImage cameraImage) {
+  static img.Image _convertYuvToRgbDart(CameraImage cameraImage) {
     final int width = cameraImage.width;
     final int height = cameraImage.height;
 
@@ -94,28 +135,39 @@ class ImageConverter {
     final int uvRowStride = cameraImage.planes[1].bytesPerRow;
     final int uvPixelStride = cameraImage.planes[1].bytesPerPixel!;
 
+    // Pre-calculate lookup tables for better performance
+    final List<int> yLookup = List.generate(256, (i) => i);
+    final List<int> uLookup = List.generate(256, (i) => i - 128);
+    final List<int> vLookup = List.generate(256, (i) => i - 128);
+
+    // Optimized constants
+    const int c_v_r = 1436;
+    const int c_u_g = 46549;
+    const int c_v_g = 93604;
+    const int c_u_b = 1814;
+
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
         final int uvIndex = uvPixelStride * (x ~/ 2) + uvRowStride * (y ~/ 2);
         final int yIndex = y * width + x;
 
-        final int yp = yPlane[yIndex];
-        final int up = uPlane[uvIndex];
-        final int vp = vPlane[uvIndex];
+        final int yp = yLookup[yPlane[yIndex]];
+        final int up = uLookup[uPlane[uvIndex]];
+        final int vp = vLookup[vPlane[uvIndex]];
 
-        // YUV to RGB conversion formula from the original `convertImage`
-        final int rt = (yp + vp * 1436 / 1024 - 179).round();
-        final int gt =
-            (yp - up * 46549 / 131072 + 44 - vp * 93604 / 131072 + 91).round();
-        final int bt = (yp + up * 1814 / 1024 - 227).round();
-
-        final int r = _clampValue(0, 255, rt);
-        final int g = _clampValue(0, 255, gt);
-        final int b = _clampValue(0, 255, bt);
+        // Optimized YUV to RGB conversion
+        final int r = _clampValue(0, 255, yp + (vp * c_v_r) ~/ 1024);
+        final int g = _clampValue(
+          0,
+          255,
+          yp - (up * c_u_g) ~/ 131072 - (vp * c_v_g) ~/ 131072,
+        );
+        final int b = _clampValue(0, 255, yp + (up * c_u_b) ~/ 1024);
 
         image.setPixelRgb(x, y, r, g, b);
       }
     }
+
     return image;
   }
 
@@ -125,10 +177,5 @@ class ImageConverter {
     if (val < lower) return lower;
     if (val > higher) return higher;
     return val;
-  }
-
-  /// Calculates the byte index for a 90°-rotated image at (x, y) given [rotatedImageWidth].
-  static int _getRotatedImageByteIndex(int x, int y, int rotatedImageWidth) {
-    return rotatedImageWidth * (y + 1) - (x + 1);
   }
 }
