@@ -1,4 +1,5 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:lightingcamera/native/yuv_converter_ffi.dart';
@@ -11,10 +12,36 @@ class ProcessedImage {
 
   ProcessedImage(this.image);
 
-  /// Returns the image as PNG-encoded bytes.
-  ///
-  /// This can be used with Flutter's `Image.memory` widget for display.
-  Uint8List get displayableBytes => img.encodePng(image);
+  Uint8List? _cachedDisplayableBytes;
+  Future<Uint8List>? _displayableBytesCache;
+
+  Future<Uint8List> get displayableBytes {
+    // Return existing cache if available
+    if (_displayableBytesCache != null) {
+      return _displayableBytesCache!;
+    }
+
+    // If we have cached bytes, return them immediately
+    if (_cachedDisplayableBytes != null) {
+      return Future.value(_cachedDisplayableBytes!);
+    }
+
+    // Create and cache the future
+    _displayableBytesCache = _computeDisplayableBytes();
+    return _displayableBytesCache!;
+  }
+
+  Future<Uint8List> _computeDisplayableBytes() async {
+    // Perform the expensive operation on a separate isolate/compute
+    final bytes = await compute(_encodeImage, image);
+    _cachedDisplayableBytes = bytes;
+    return bytes;
+  }
+
+  // Static function for compute
+  static Uint8List _encodeImage(dynamic image) {
+    return img.encodeJpg(image);
+  }
 }
 
 class ImageConverter {
@@ -26,9 +53,6 @@ class ImageConverter {
   static ProcessedImage processImage(ImageWithMetadata imageWithMetadata) {
     final cameraImage = imageWithMetadata.image;
 
-    // Convert YUV to RGB
-    img.Image rgbImage = _convertYuvToRgbOptimized(cameraImage);
-
     // Apply rotation to match what CameraPreview shows
     // The rotation logic needs to account for both device orientation AND camera type
     double rotationAngle = _getRotationAngle(
@@ -36,9 +60,15 @@ class ImageConverter {
       imageWithMetadata.lensDirection,
     );
 
-    if (rotationAngle != 0) {
-      rgbImage = img.copyRotate(rgbImage, angle: rotationAngle);
-    }
+    // Convert YUV to RGB
+    img.Image rgbImage = _convertYuvToRgbOptimized(
+      cameraImage,
+      rotationAngle.toInt(),
+    );
+
+    // if (rotationAngle != 0) {
+    //   rgbImage = img.copyRotate(rgbImage, angle: rotationAngle);
+    // }
 
     return ProcessedImage(rgbImage);
   }
@@ -79,8 +109,11 @@ class ImageConverter {
     }
   }
 
-  // Optimized YUV to RGB conversion using native code
-  static img.Image _convertYuvToRgbOptimized(CameraImage cameraImage) {
+  /// Uses native C for the conversion.
+  static img.Image _convertYuvToRgbOptimized(
+    CameraImage cameraImage,
+    int rotation,
+  ) {
     final int width = cameraImage.width;
     final int height = cameraImage.height;
 
@@ -100,28 +133,24 @@ class ImageConverter {
       height,
       uvRowStride,
       uvPixelStride,
+      rotation,
     );
 
-    // Create image from RGB data
-    final image = img.Image(width: width, height: height);
+    // Dimensions of the possibly-rotated output image
+    final int destWidth = (rotation == 90 || rotation == 270) ? height : width;
+    final int destHeight = (rotation == 90 || rotation == 270) ? width : height;
 
-    // Copy RGB data to image (optimized loop)
-    int rgbIndex = 0;
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        final int r = rgbData[rgbIndex++];
-        final int g = rgbData[rgbIndex++];
-        final int b = rgbData[rgbIndex++];
-        image.setPixelRgb(x, y, r, g, b);
-      }
-    }
-
-    return image;
+    return img.Image.fromBytes(
+      width: destWidth,
+      height: destHeight,
+      bytes: rgbData.buffer,
+      order: img.ChannelOrder.rgb,
+    );
   }
 
   /// Converts a [CameraImage] in YUV420 format to a `img.Image` in RGB format.
   ///
-  /// Note: This is a pure Dart implementation and might be slow.
+  /// Note: This is a pure Dart implementation and is slow.
   static img.Image _convertYuvToRgbDart(CameraImage cameraImage) {
     final int width = cameraImage.width;
     final int height = cameraImage.height;
@@ -140,7 +169,6 @@ class ImageConverter {
     final List<int> uLookup = List.generate(256, (i) => i - 128);
     final List<int> vLookup = List.generate(256, (i) => i - 128);
 
-    // Optimized constants
     const int c_v_r = 1436;
     const int c_u_g = 46549;
     const int c_v_g = 93604;
@@ -155,7 +183,7 @@ class ImageConverter {
         final int up = uLookup[uPlane[uvIndex]];
         final int vp = vLookup[vPlane[uvIndex]];
 
-        // Optimized YUV to RGB conversion
+        // YUV to RGB conversion
         final int r = _clampValue(0, 255, yp + (vp * c_v_r) ~/ 1024);
         final int g = _clampValue(
           0,

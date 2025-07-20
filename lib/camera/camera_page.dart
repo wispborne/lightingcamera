@@ -22,8 +22,6 @@ class CameraPageState extends State<CameraPage> with RouteAware {
   final ImageCacheManager _cacheManager = ImageCacheManager();
 
   img_lib.Image? displayImage;
-  bool _isConverting = false;
-  CameraImage? _latestImageToConvert;
   int _imagesCapturedLastSecond = 0;
   int _fps = 0;
   bool showLivePreview = false;

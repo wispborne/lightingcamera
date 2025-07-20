@@ -79,88 +79,105 @@ class _GalleryPageState extends State<GalleryPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Gallery (${widget.images.length} images)'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _showExitDialog,
+    return PopScope(
+      canPop: false, // Prevent automatic popping
+      onPopInvokedWithResult: (bool didPop, dynamic result) {
+        if (!didPop) {
+          _showExitDialog();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text('Gallery (${widget.images.length} images)'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _showExitDialog,
+          ),
+          backgroundColor: Colors.black87,
+          foregroundColor: Colors.white,
         ),
-        backgroundColor: Colors.black87,
-        foregroundColor: Colors.white,
-      ),
-      backgroundColor: Colors.black,
-      body:
-          widget.images.isEmpty
-              ? const Center(
-                child: Text(
-                  'No images to display',
-                  style: TextStyle(color: Colors.white),
-                ),
-              )
-              : GridView.builder(
-                padding: const EdgeInsets.all(2),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 2,
-                  crossAxisSpacing: 2,
-                  childAspectRatio: 1,
-                ),
-                itemCount: widget.images.length,
-                itemBuilder: (context, index) {
-                  // Lazy load more images as user scrolls
-                  if (index >=
-                      _displayImages.length + _currentlyConverting.length) {
-                    _convertImageBatch(index, _batchSize);
-                  }
+        backgroundColor: Colors.black,
+        body:
+            widget.images.isEmpty
+                ? const Center(
+                  child: Text(
+                    'No images to display',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                )
+                : GridView.builder(
+                  padding: const EdgeInsets.all(2),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    mainAxisSpacing: 2,
+                    crossAxisSpacing: 2,
+                    childAspectRatio: 1,
+                  ),
+                  itemCount: widget.images.length,
+                  itemBuilder: (context, index) {
+                    // Lazy load more images as user scrolls
+                    if (index >=
+                        _displayImages.length + _currentlyConverting.length) {
+                      _convertImageBatch(index, _batchSize);
+                    }
 
-                  final displayImage = _displayImages[index];
-                  final isConverting = _currentlyConverting.contains(index);
+                    final displayImage = _displayImages[index];
+                    final isConverting = _currentlyConverting.contains(index);
 
-                  return GestureDetector(
-                    onTap:
-                        displayImage != null
-                            ? () => _showFullscreenImage(
-                              context,
-                              _displayImages[index]!,
-                              index,
-                            )
-                            : null,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(4),
-                        color: Colors.grey[900],
-                      ),
-                      child:
+                    return GestureDetector(
+                      onTap:
                           displayImage != null
-                              ? ClipRRect(
-                                borderRadius: BorderRadius.circular(4),
-                                child: Image.memory(
-                                  displayImage.displayableBytes,
-                                  fit: BoxFit.cover,
-                                ),
+                              ? () => _showFullscreenImage(
+                                context,
+                                _displayImages[index]!,
+                                index,
                               )
-                              : Center(
-                                child:
-                                    isConverting
-                                        ? const SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
+                              : null,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(4),
+                          color: Colors.grey[900],
+                        ),
+                        child:
+                            displayImage != null
+                                ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: FutureBuilder(
+                                    future: displayImage.displayableBytes,
+                                    builder:
+                                        (context, asyncSnapshot) =>
+                                            !asyncSnapshot.hasData
+                                                ? const Center(
+                                                  child:
+                                                      CircularProgressIndicator(),
+                                                )
+                                                : Image.memory(
+                                                  asyncSnapshot.requireData,
+                                                ),
+                                  ),
+                                )
+                                : Center(
+                                  child:
+                                      isConverting
+                                          ? const SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white,
+                                            ),
+                                          )
+                                          : const Icon(
+                                            Icons.image,
+                                            color: Colors.white54,
+                                            size: 30,
                                           ),
-                                        )
-                                        : const Icon(
-                                          Icons.image,
-                                          color: Colors.white54,
-                                          size: 30,
-                                        ),
-                              ),
-                    ),
-                  );
-                },
-              ),
+                                ),
+                      ),
+                    );
+                  },
+                ),
+      ),
     );
   }
 
@@ -244,9 +261,13 @@ class FullscreenImagePage extends StatelessWidget {
       ),
       body: Center(
         child: InteractiveViewer(
-          child: Image.memory(
-            timestampedImage.displayableBytes,
-            fit: BoxFit.contain,
+          child: FutureBuilder(
+            future: timestampedImage.displayableBytes,
+            builder:
+                (context, asyncSnapshot) =>
+                    !asyncSnapshot.hasData
+                        ? const Center(child: CircularProgressIndicator())
+                        : Image.memory(asyncSnapshot.requireData),
           ),
         ),
       ),

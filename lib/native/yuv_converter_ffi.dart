@@ -15,6 +15,7 @@ typedef ConvertYuvToRgbNative =
       Int32 height,
       Int32 uvRowStride,
       Int32 uvPixelStride,
+      Int32 rotation,
     );
 
 typedef ConvertYuvToRgbDart =
@@ -27,6 +28,7 @@ typedef ConvertYuvToRgbDart =
       int height,
       int uvRowStride,
       int uvPixelStride,
+      int rotation,
     );
 
 class YuvConverterFFI {
@@ -60,6 +62,7 @@ class YuvConverterFFI {
     int height,
     int uvRowStride,
     int uvPixelStride,
+    int rotation,
   ) {
     _loadLibrary();
 
@@ -88,6 +91,7 @@ class YuvConverterFFI {
         height,
         uvRowStride,
         uvPixelStride,
+        rotation,
       );
 
       // Copy result back to Dart

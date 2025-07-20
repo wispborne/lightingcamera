@@ -1,29 +1,41 @@
 #include <stdint.h>
 #include <math.h>
 
-// Clamp value between min and max
+
 static inline int clamp(int value, int min, int max) {
     return value < min ? min : (value > max ? max : value);
 }
 
-// Fast YUV to RGB conversion with optimized calculations
+/**
+ * Converts YUV planar data to RGB with optional rotation.
+ * @param y_plane        Pointer to Y plane.
+ * @param u_plane        Pointer to U plane.
+ * @param v_plane        Pointer to V plane.
+ * @param rgb_output     Pointer to RGB output buffer (size: width * height * 3).
+ * @param width          Source image width.
+ * @param height         Source image height.
+ * @param uv_row_stride  Row stride for U/V planes.
+ * @param uv_pixel_stride Pixel stride for U/V planes.
+ * @param rotation       Rotation in degrees (0, 90, 180, 270).
+ */
 void convert_yuv_to_rgb(
-        uint8_t* y_plane,
-        uint8_t* u_plane,
-        uint8_t* v_plane,
-        uint8_t* rgb_output,
+        uint8_t *y_plane,
+        uint8_t *u_plane,
+        uint8_t *v_plane,
+        uint8_t *rgb_output,
         int width,
         int height,
         int uv_row_stride,
-        int uv_pixel_stride
+        int uv_pixel_stride,
+        int rotation
 ) {
     // Pre-calculate conversion constants for better performance
-    const int c_v_r = 1436;      // 1.403 * 1024
-    const int c_u_g = 46549;     // 0.344 * 131072
-    const int c_v_g = 93604;     // 0.714 * 131072
-    const int c_u_b = 1814;      // 1.773 * 1024
+    const int c_v_r = 1436;      // 1.402 * 1024
+    const int c_u_g = 45100;     // 0.34414 * 131072 (Corrected)
+    const int c_v_g = 93604;     // 0.71414 * 131072
+    const int c_u_b = 1814;      // 1.772 * 1024
 
-    int rgb_index = 0;
+    const int dest_width = (rotation == 90 || rotation == 270) ? height : width;
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
@@ -41,62 +53,30 @@ void convert_yuv_to_rgb(
             int g = yp - (up * c_u_g) / 131072 - (vp * c_v_g) / 131072;
             int b = yp + (up * c_u_b) / 1024;
 
-            // Clamp values to valid range
-            rgb_output[rgb_index++] = clamp(r, 0, 255);
-            rgb_output[rgb_index++] = clamp(g, 0, 255);
-            rgb_output[rgb_index++] = clamp(b, 0, 255);
-        }
-    }
-}
-
-// Alternative SIMD-optimized version (if available)
-#ifdef __ARM_NEON
-#include <arm_neon.h>
-
-void convert_yuv_to_rgb_neon(
-    uint8_t* y_plane,
-    uint8_t* u_plane,
-    uint8_t* v_plane,
-    uint8_t* rgb_output,
-    int width,
-    int height,
-    int uv_row_stride,
-    int uv_pixel_stride
-) {
-    // NEON SIMD implementation for ARM processors
-    // This processes 8 pixels at once for better performance
-    const int16x8_t c_v_r = vdupq_n_s16(1436);
-    const int16x8_t c_u_g = vdupq_n_s16(355);  // Adjusted for 16-bit
-    const int16x8_t c_v_g = vdupq_n_s16(714);  // Adjusted for 16-bit
-    const int16x8_t c_u_b = vdupq_n_s16(1814);
-    const int16x8_t offset = vdupq_n_s16(128);
-
-    int rgb_index = 0;
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x += 8) {
-            // Process 8 pixels at once when possible
-            int remaining = width - x;
-            int process_count = remaining > 8 ? 8 : remaining;
-
-            for (int i = 0; i < process_count; i++) {
-                int curr_x = x + i;
-                int uv_index = uv_pixel_stride * (curr_x / 2) + uv_row_stride * (y / 2);
-                int y_index = y * width + curr_x;
-
-                int yp = y_plane[y_index];
-                int up = u_plane[uv_index] - 128;
-                int vp = v_plane[uv_index] - 128;
-
-                int r = yp + (vp * 1436) / 1024;
-                int g = yp - (up * 355) / 1024 - (vp * 714) / 1024;
-                int b = yp + (up * 1814) / 1024;
-
-                rgb_output[rgb_index++] = clamp(r, 0, 255);
-                rgb_output[rgb_index++] = clamp(g, 0, 255);
-                rgb_output[rgb_index++] = clamp(b, 0, 255);
+            int dest_x, dest_y;
+            switch (rotation) {
+                case 90:
+                    dest_x = height - 1 - y;
+                    dest_y = x;
+                    break;
+                case 180:
+                    dest_x = width - 1 - x;
+                    dest_y = height - 1 - y;
+                    break;
+                case 270:
+                    dest_x = y;
+                    dest_y = width - 1 - x;
+                    break;
+                default:
+                    dest_x = x;
+                    dest_y = y;
+                    break;
             }
+
+            int dest_index = (dest_y * dest_width + dest_x) * 3;
+            rgb_output[dest_index] = clamp(r, 0, 255);
+            rgb_output[dest_index + 1] = clamp(g, 0, 255);
+            rgb_output[dest_index + 2] = clamp(b, 0, 255);
         }
     }
 }
-#endif
