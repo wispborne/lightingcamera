@@ -90,9 +90,9 @@ class ImageConverter {
         case DeviceOrientation.portraitDown:
           return -90;
         case DeviceOrientation.landscapeLeft:
-          return 180;
-        case DeviceOrientation.landscapeRight:
           return 0;
+        case DeviceOrientation.landscapeRight:
+          return 180;
       }
     } else {
       // Front camera rotation logic (different from back camera)

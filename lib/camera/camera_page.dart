@@ -4,9 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img_lib;
-import 'package:lightingcamera/camera/gallery_page.dart';
 import 'package:lightingcamera/camera/image_cache_manager.dart';
 import 'package:lightingcamera/main.dart';
+import 'package:native_device_orientation/native_device_orientation.dart';
 
 class CameraPage extends ConsumerStatefulWidget {
   const CameraPage({super.key});
@@ -26,6 +26,13 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
   int _imagesCapturedLastSecond = 0;
   int _fps = 0;
   bool showLivePreview = false;
+  DeviceOrientation _currentOrientation = DeviceOrientation.portraitUp;
+
+  // Exposure compensation variables
+  double _exposureCompensation = 0.0;
+  double _sliderExposureValue = 0.0; // Add separate slider value
+  double _minExposureCompensation = -2.0;
+  double _maxExposureCompensation = 2.0;
 
   static final RouteObserver<PageRoute> routeObserver =
       RouteObserver<PageRoute>();
@@ -122,6 +129,12 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
 
     try {
       await controller?.initialize();
+
+      // Get exposure compensation limits after initialization
+      if (controller != null && controller!.value.isInitialized) {
+        _minExposureCompensation = await controller!.getMinExposureOffset();
+        _maxExposureCompensation = await controller!.getMaxExposureOffset();
+      }
     } on CameraException catch (e) {
       switch (e.code) {
         case 'CameraAccessDenied':
@@ -146,6 +159,123 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
     }
   }
 
+  Future<void> _setExposureCompensation(double value) async {
+    if (controller == null || !controller!.value.isInitialized) {
+      return;
+    }
+
+    try {
+      await controller!.setExposureOffset(value);
+      setState(() {
+        _exposureCompensation = value;
+        _sliderExposureValue = value; // Update slider value
+      });
+      print('Set exposure compensation to: $value');
+    } catch (e) {
+      // Don't update if setting failed, but update slider to reflect actual value
+      setState(() {
+        _sliderExposureValue =
+            _exposureCompensation; // Reset slider to last known good value
+      });
+      print('Error setting exposure compensation: $e');
+    }
+  }
+
+  Widget _buildVerticalExposureSlider() {
+    return Container(
+      height: 180,
+      width: 50,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(25),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Exposure icon
+          const Icon(Icons.wb_sunny_outlined, color: Colors.white, size: 16),
+          const SizedBox(height: 4),
+
+          // Current value display
+          Text(
+            _sliderExposureValue.toStringAsFixed(1), // Show slider value
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 6),
+
+          // Vertical slider
+          Expanded(
+            child: RotatedBox(
+              quarterTurns: -1, // Rotate 90 degrees counter-clockwise
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  activeTrackColor: Colors.white,
+                  inactiveTrackColor: Colors.white38,
+                  thumbColor: Colors.white,
+                  overlayColor: Colors.white.withOpacity(0.2),
+                  trackHeight: 2.0,
+                  thumbShape: const RoundSliderThumbShape(
+                    enabledThumbRadius: 6,
+                  ),
+                ),
+                child: Slider(
+                  value: _sliderExposureValue,
+                  // Use separate slider value
+                  min: _minExposureCompensation,
+                  max: _maxExposureCompensation,
+                  divisions:
+                      ((_maxExposureCompensation - _minExposureCompensation) *
+                              10)
+                          .round(),
+                  onChanged: (value) {
+                    setState(() {
+                      _sliderExposureValue = value; // Update slider immediately
+                    });
+                    _setExposureCompensation(value); // Then try to set camera
+                  },
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+
+          // Reset button
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _sliderExposureValue = 0.0; // Reset slider immediately
+              });
+              _setExposureCompensation(0.0); // Then reset camera
+            },
+            child: Container(
+              width: 24,
+              height: 16,
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Center(
+                child: Text(
+                  '0',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cacheManager = ref.read(imageCacheProvider);
@@ -156,7 +286,13 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
         if (controller != null && _cameras != null) {
           return Stack(
             children: [
-              CameraPreview(controller!),
+              NativeDeviceOrientationReader(
+                builder: (context) {
+                  _currentOrientation = NativeDeviceOrientationReader.orientation(context).deviceOrientation ?? DeviceOrientation.portraitUp;
+
+                  return CameraPreview(controller!);
+                }
+              ),
               Column(
                 children: [
                   Padding(
@@ -222,6 +358,13 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
                   ),
                 ],
               ),
+
+              // Vertical exposure slider in bottom-right corner
+              Positioned(
+                bottom: 140, // Above the shutter button
+                right: 16,
+                child: _buildVerticalExposureSlider(),
+              ),
             ],
           );
         } else {
@@ -255,7 +398,7 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
         if (!mounted) return;
 
         // Get the actual device orientation
-        DeviceOrientation orientation = await _getDeviceOrientation();
+        DeviceOrientation orientation = _currentOrientation;
 
         cacheManager.addImage(
           image,
@@ -272,21 +415,24 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
     }
   }
 
-  Future<DeviceOrientation> _getDeviceOrientation() async {
-    // Get the current system orientation
-    final List<DeviceOrientation> orientations = await SystemChannels.platform
-        .invokeMethod<List<dynamic>>('SystemChrome.getSystemUIOverlayStyle')
-        .then((dynamic result) => <DeviceOrientation>[]);
-
-    // Fallback to using MediaQuery with better mapping
-    switch (MediaQuery.orientationOf(context)) {
-      case Orientation.portrait:
-        // You might want to use device sensors here for more accurate detection
-        return DeviceOrientation.portraitUp;
-      case Orientation.landscape:
-        return DeviceOrientation.landscapeLeft;
-    }
-  }
+  // Future<DeviceOrientation> _getDeviceOrientation() async {
+  //   if (!context.mounted) {
+  //     return DeviceOrientation.portraitUp;
+  //   }
+  //
+  //   return (await NativeDeviceOrientationCommunicator().orientation(
+  //         useSensor: true,
+  //       )).deviceOrientation ??
+  //       DeviceOrientation.portraitUp;
+  //
+  //   switch (MediaQuery.orientationOf(context)) {
+  //     case Orientation.portrait:
+  //       // You might want to use device sensors here for more accurate detection
+  //       return DeviceOrientation.portraitUp;
+  //     case Orientation.landscape:
+  //       return DeviceOrientation.landscapeLeft;
+  //   }
+  // }
 
   void _stopRecording() async {
     if (controller == null ||
