@@ -1,5 +1,7 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Wrapper class for CameraImage that includes timestamp and other metadata
 class ImageWithMetadata {
@@ -27,13 +29,11 @@ class ImageWithMetadata {
   }
 }
 
-class ImageCacheManager {
-  static final ImageCacheManager _instance = ImageCacheManager._internal();
+final imageCacheProvider = ChangeNotifierProvider<ImageCacheManager>((ref) {
+  return ImageCacheManager();
+});
 
-  factory ImageCacheManager() => _instance;
-
-  ImageCacheManager._internal();
-
+class ImageCacheManager extends ChangeNotifier {
   final List<ImageWithMetadata> _cachedImages = [];
   final int _maxCacheSize = 100;
   int _sequenceCounter = 0;
@@ -58,6 +58,8 @@ class ImageCacheManager {
     while (_cachedImages.length > _maxCacheSize) {
       _cachedImages.removeAt(0);
     }
+
+    notifyListeners();
   }
 
   /// Get a copy of all cached images (returns just the CameraImage objects for compatibility)
@@ -74,6 +76,7 @@ class ImageCacheManager {
   void clearCache() {
     _cachedImages.clear();
     _sequenceCounter = 0;
+    notifyListeners();
   }
 
   /// Get the number of cached images

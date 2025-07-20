@@ -1,25 +1,26 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img_lib;
 import 'package:lightingcamera/camera/gallery_page.dart';
 import 'package:lightingcamera/camera/image_cache_manager.dart';
+import 'package:lightingcamera/main.dart';
 
-class CameraPage extends StatefulWidget {
+class CameraPage extends ConsumerStatefulWidget {
   const CameraPage({super.key});
 
   @override
-  State<CameraPage> createState() => CameraPageState();
+  ConsumerState<CameraPage> createState() => CameraPageState();
 }
 
-class CameraPageState extends State<CameraPage> with RouteAware {
+class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
   CameraController? controller;
   Future<void>? _initializeControllerFuture;
   List<CameraDescription>? _cameras;
   bool isRecording = false;
   bool _isPageVisible = true;
-
-  final ImageCacheManager _cacheManager = ImageCacheManager();
 
   img_lib.Image? displayImage;
   int _imagesCapturedLastSecond = 0;
@@ -65,6 +66,10 @@ class CameraPageState extends State<CameraPage> with RouteAware {
   void didPopNext() {
     // Covering route was popped off the navigator, this route is now topmost
     _isPageVisible = true;
+    if (controller != null && controller!.value.isInitialized) {
+      controller!.resumePreview();
+    }
+
     if (!isRecording && controller != null && controller!.value.isInitialized) {
       _startRecording();
     }
@@ -143,6 +148,8 @@ class CameraPageState extends State<CameraPage> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
+    final cacheManager = ref.read(imageCacheProvider);
+
     return FutureBuilder<void>(
       future: _initializeControllerFuture,
       builder: (context, snapshot) {
@@ -164,12 +171,12 @@ class CameraPageState extends State<CameraPage> with RouteAware {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Caching the last ${_cacheManager.getCacheDurationSeconds().toStringAsFixed(1)} seconds',
+                            'Caching the last ${cacheManager.getCacheDurationSeconds().toStringAsFixed(1)} seconds',
                             style: const TextStyle(color: Colors.white),
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Image Count: ${_cacheManager.cacheSize} | FPS: $_fps | Cache: ${_cacheManager.getCacheMemoryUsageMB().toStringAsFixed(1)}MB',
+                            'Image Count: ${cacheManager.cacheSize} | FPS: $_fps | Cache: ${cacheManager.getCacheMemoryUsageMB().toStringAsFixed(1)}MB',
                             style: const TextStyle(color: Colors.white),
                           ),
                           if (!_isPageVisible || !isRecording)
@@ -226,32 +233,22 @@ class CameraPageState extends State<CameraPage> with RouteAware {
   }
 
   void _onShutterPressed() {
-    if (_cacheManager.cacheSize > 0) {
+    final cacheManager = ref.read(imageCacheProvider);
+    if (cacheManager.cacheSize > 0) {
       _openGallery();
     }
   }
 
   void _openGallery() {
-    if (_cacheManager.cacheSize == 0) return;
+    final cacheManager = ref.read(imageCacheProvider);
+    if (cacheManager.cacheSize == 0) return;
 
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder:
-            (context) => GalleryPage(
-              images: _cacheManager.getTimestampedImages(),
-              onBack: () {
-                // Clear cache when returning from gallery
-                _cacheManager.clearCache();
-                Navigator.of(context).pop();
-                setState(() {}); // Refresh UI to show updated cache size
-              },
-            ),
-      ),
-    );
+    context.goNamed(Pages.gallery);
   }
 
   void _startRecording() async {
     if (controller == null || !controller!.value.isInitialized) return;
+    final cacheManager = ref.read(imageCacheProvider);
 
     try {
       await controller!.startImageStream((CameraImage image) async {
@@ -260,16 +257,12 @@ class CameraPageState extends State<CameraPage> with RouteAware {
         // Get the actual device orientation
         DeviceOrientation orientation = await _getDeviceOrientation();
 
-        _cacheManager.addImage(
+        cacheManager.addImage(
           image,
           orientation,
           controller!.description.lensDirection,
         );
         _imagesCapturedLastSecond++;
-
-        if (mounted) {
-          setState(() {}); // Update UI with new cache size
-        }
       });
       setState(() {
         isRecording = true;
@@ -296,12 +289,14 @@ class CameraPageState extends State<CameraPage> with RouteAware {
   }
 
   void _stopRecording() async {
-    if (controller == null || !controller!.value.isInitialized || !isRecording)
+    if (controller == null ||
+        !controller!.value.isInitialized ||
+        !isRecording) {
       return;
+    }
 
     try {
       await controller!.pausePreview();
-      await controller!.pauseVideoRecording();
       await controller!.stopImageStream();
       setState(() {
         isRecording = false;

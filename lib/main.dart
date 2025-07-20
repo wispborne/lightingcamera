@@ -1,25 +1,48 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lightingcamera/camera/camera_page.dart';
+import 'package:lightingcamera/camera/gallery_page.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(ProviderScope(child: const MyApp()));
 }
+
+class Pages {
+  static String home = "home";
+  static String gallery = "gallery";
+  static String settings = "settings";
+}
+
+final _router = GoRouter(
+  routes: [
+    GoRoute(
+      name: Pages.home,
+      path: '/',
+      builder: (context, state) => const MyHomePage(title: 'Lightning Camera'),
+    ),
+    GoRoute(
+      name: Pages.gallery,
+      path: '/gallery',
+      builder: (context, state) => const GalleryPage(),
+    ),
+  ],
+);
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
+    return MaterialApp.router(
+      title: 'Lightning Camera',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           brightness: Brightness.dark,
           seedColor: Colors.deepPurple,
         ),
       ),
-      navigatorObservers: [CameraPageState.routeObserver],
-      home: const MyHomePage(title: 'Lightning Camera'),
+      routerConfig: _router,
     );
   }
 }

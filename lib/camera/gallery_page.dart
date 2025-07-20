@@ -1,24 +1,25 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img_lib;
 import 'package:lightingcamera/camera/image_converter.dart';
+import 'package:lightingcamera/main.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'image_cache_manager.dart';
 
-class GalleryPage extends StatefulWidget {
-  final List<ImageWithMetadata> images;
-  final VoidCallback onBack;
-
-  const GalleryPage({super.key, required this.images, required this.onBack});
+class GalleryPage extends ConsumerStatefulWidget {
+  const GalleryPage({super.key});
 
   @override
-  State<GalleryPage> createState() => _GalleryPageState();
+  ConsumerState<GalleryPage> createState() => _GalleryPageState();
 }
 
-class _GalleryPageState extends State<GalleryPage> {
+class _GalleryPageState extends ConsumerState<GalleryPage> {
+  List<ImageWithMetadata> images = [];
   final Map<int, ProcessedImage> _displayImages = {};
   final Set<int> _currentlyConverting = {};
   final int _batchSize = 3;
@@ -26,13 +27,15 @@ class _GalleryPageState extends State<GalleryPage> {
   @override
   void initState() {
     super.initState();
+    images = ref.read(imageCacheProvider).getTimestampedImages();
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _convertImageBatch(0, _batchSize);
     });
   }
 
   Future<void> _convertImageBatch(int start, int count) async {
-    final end = (start + count).clamp(0, widget.images.length);
+    final end = (start + count).clamp(0, images.length);
 
     for (int i = start; i < end; i++) {
       if (_displayImages.containsKey(i) || _currentlyConverting.contains(i)) {
@@ -46,7 +49,7 @@ class _GalleryPageState extends State<GalleryPage> {
 
   Future<void> _convertSingleImage(int index) async {
     try {
-      final timestampedImage = widget.images[index];
+      final timestampedImage = images[index];
       final displayImage = await _convertCameraImageToUIImage(timestampedImage);
 
       if (mounted && displayImage != null) {
@@ -88,7 +91,7 @@ class _GalleryPageState extends State<GalleryPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text('Gallery (${widget.images.length} images)'),
+          title: Text('Gallery (${images.length} images)'),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: _showExitDialog,
@@ -98,7 +101,7 @@ class _GalleryPageState extends State<GalleryPage> {
         ),
         backgroundColor: Colors.black,
         body:
-            widget.images.isEmpty
+            images.isEmpty
                 ? const Center(
                   child: Text(
                     'No images to display',
@@ -113,7 +116,7 @@ class _GalleryPageState extends State<GalleryPage> {
                     crossAxisSpacing: 2,
                     childAspectRatio: 1,
                   ),
-                  itemCount: widget.images.length,
+                  itemCount: images.length,
                   itemBuilder: (context, index) {
                     // Lazy load more images as user scrolls
                     if (index >=
@@ -197,8 +200,9 @@ class _GalleryPageState extends State<GalleryPage> {
             ),
             TextButton(
               onPressed: () {
-                Navigator.of(context).pop();
-                widget.onBack();
+                final cacheManager = ref.read(imageCacheProvider);
+                cacheManager.clearCache();
+                context.goNamed(Pages.home);
               },
               child: const Text('Return to camera'),
             ),
