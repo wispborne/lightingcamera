@@ -9,8 +9,8 @@ add_library(yuv_converter SHARED
 # Enable optimizations
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -ffast-math")
 
-# Enable NEON for ARM processors
-if(${ANDROID_ABI} STREQUAL "arm64-v8a" OR ${ANDROID_ABI} STREQUAL "armeabi-v7a")
+# Enable NEON for 32-bit ARM (always available on arm64)
+if(${ANDROID_ABI} STREQUAL "armeabi-v7a")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpu=neon")
 endif()
 

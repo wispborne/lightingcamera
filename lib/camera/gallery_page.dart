@@ -1,7 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img_lib;
@@ -11,14 +10,14 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'image_cache_manager.dart';
 
-class GalleryPage extends ConsumerStatefulWidget {
+class GalleryPage extends StatefulWidget {
   const GalleryPage({super.key});
 
   @override
-  ConsumerState<GalleryPage> createState() => _GalleryPageState();
+  State<GalleryPage> createState() => _GalleryPageState();
 }
 
-class _GalleryPageState extends ConsumerState<GalleryPage> {
+class _GalleryPageState extends State<GalleryPage> {
   List<ImageWithMetadata> images = [];
   final Map<int, ProcessedImage> _displayImages = {};
   final Set<int> _currentlyConverting = {};
@@ -27,7 +26,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
   @override
   void initState() {
     super.initState();
-    images = ref.read(imageCacheProvider).getTimestampedImages();
+    images = imageCacheManager.getTimestampedImages();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _convertImageBatch(0, _batchSize);
@@ -200,7 +199,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
             ),
             TextButton(
               onPressed: () {
-                final cacheManager = ref.read(imageCacheProvider);
+                final cacheManager = imageCacheManager;
                 cacheManager.clearCache();
                 context.goNamed(Pages.home);
               },

@@ -1,21 +1,21 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img_lib;
 import 'package:lightingcamera/camera/image_cache_manager.dart';
 import 'package:lightingcamera/main.dart';
 import 'package:native_device_orientation/native_device_orientation.dart';
+import 'package:volume_controller/volume_controller.dart';
 
-class CameraPage extends ConsumerStatefulWidget {
+class CameraPage extends StatefulWidget {
   const CameraPage({super.key});
 
   @override
-  ConsumerState<CameraPage> createState() => CameraPageState();
+  State<CameraPage> createState() => CameraPageState();
 }
 
-class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
+class CameraPageState extends State<CameraPage> with RouteAware {
   CameraController? controller;
   Future<void>? _initializeControllerFuture;
   List<CameraDescription>? _cameras;
@@ -30,9 +30,15 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
 
   // Exposure compensation variables
   double _exposureCompensation = 0.0;
-  double _sliderExposureValue = 0.0; // Add separate slider value
+  double _sliderExposureValue = 0.0;
   double _minExposureCompensation = -2.0;
   double _maxExposureCompensation = 2.0;
+
+  // Volume button variables
+  VolumeController? _volumeController;
+  double _originalVolume = 0.0;
+  bool _volumeButtonsEnabled = true;
+  bool _isVolumeControllerInitialized = false;
 
   static final RouteObserver<PageRoute> routeObserver =
       RouteObserver<PageRoute>();
@@ -41,6 +47,36 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
   void initState() {
     super.initState();
     _initializeControllerFuture = _initializeCamera();
+    _initializeVolumeController();
+  }
+
+  Future<void> _initializeVolumeController() async {
+    try {
+      _volumeController = VolumeController.instance;
+
+      // Store the original volume level
+      _originalVolume = await _volumeController!.getVolume();
+
+      // Hide the system volume UI completely
+      _volumeController!.showSystemUI = false;
+
+      // Set up listener that intercepts volume changes
+      _volumeController!.addListener((newVolume) {
+        if (_volumeButtonsEnabled &&
+            _isPageVisible &&
+            _isVolumeControllerInitialized) {
+          // Immediately restore the original volume to prevent any volume change
+          _volumeController!.setVolume(_originalVolume);
+
+          // Trigger the camera shutter
+          _onShutterPressed();
+        }
+      });
+
+      _isVolumeControllerInitialized = true;
+    } catch (e) {
+      print('Error initializing volume controller: $e');
+    }
   }
 
   @override
@@ -55,6 +91,9 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
+    _volumeController?.removeListener();
+    // Restore system volume UI when leaving
+    _volumeController?.showSystemUI = true;
     controller?.dispose();
     super.dispose();
   }
@@ -62,8 +101,9 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
   // RouteAware methods
   @override
   void didPush() {
-    // Route was pushed onto navigator and is now topmost route
     _isPageVisible = true;
+    _volumeButtonsEnabled = true;
+    _enableVolumeButtonOverride();
     if (!isRecording && controller != null && controller!.value.isInitialized) {
       _startRecording();
     }
@@ -71,8 +111,9 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
 
   @override
   void didPopNext() {
-    // Covering route was popped off the navigator, this route is now topmost
     _isPageVisible = true;
+    _volumeButtonsEnabled = true;
+    _enableVolumeButtonOverride();
     if (controller != null && controller!.value.isInitialized) {
       controller!.resumePreview();
     }
@@ -84,8 +125,9 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
 
   @override
   void didPushNext() {
-    // Route was pushed on top of this route
     _isPageVisible = false;
+    _volumeButtonsEnabled = false;
+    _disableVolumeButtonOverride();
     if (isRecording) {
       _stopRecording();
     }
@@ -93,10 +135,26 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
 
   @override
   void didPop() {
-    // Route was popped off the navigator
     _isPageVisible = false;
+    _volumeButtonsEnabled = false;
+    _disableVolumeButtonOverride();
     if (isRecording) {
       _stopRecording();
+    }
+  }
+
+  void _enableVolumeButtonOverride() async {
+    if (_volumeController != null) {
+      // Store current volume when enabling override
+      _originalVolume = await _volumeController!.getVolume();
+      _volumeController!.showSystemUI = false;
+    }
+  }
+
+  void _disableVolumeButtonOverride() async {
+    if (_volumeController != null) {
+      // Re-enable system volume UI when disabling override
+      _volumeController!.showSystemUI = true;
     }
   }
 
@@ -104,16 +162,15 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
     // Start a timer to calculate FPS
     Future.doWhile(() async {
       await Future.delayed(const Duration(seconds: 1));
-      if (!mounted) return false; // Stop if the widget is disposed
+      if (!mounted) return false;
       _fps = _imagesCapturedLastSecond;
       _imagesCapturedLastSecond = 0;
-      setState(() {}); // Update the UI with the new FPS
-      return true; // Continue the loop
+      setState(() {});
+      return true;
     });
-    // Obtain a list of the available cameras on the device.
+
     _cameras = await availableCameras();
 
-    // Find the main back camera from the list of available cameras.
     CameraDescription? backCamera;
     for (final camera in _cameras!) {
       if (camera.lensDirection == CameraLensDirection.back) {
@@ -122,15 +179,12 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
       }
     }
 
-    // If no back camera is found, fall back to the first available camera
     final selectedCamera = backCamera ?? _cameras![0];
-
     controller = CameraController(selectedCamera, ResolutionPreset.high);
 
     try {
       await controller?.initialize();
 
-      // Get exposure compensation limits after initialization
       if (controller != null && controller!.value.isInitialized) {
         _minExposureCompensation = await controller!.getMinExposureOffset();
         _maxExposureCompensation = await controller!.getMaxExposureOffset();
@@ -138,10 +192,8 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
     } on CameraException catch (e) {
       switch (e.code) {
         case 'CameraAccessDenied':
-          // Handle access errors here.
           break;
         default:
-          // Handle other errors here.
           break;
       }
       return;
@@ -153,7 +205,6 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
 
     setState(() {});
 
-    // Start recording immediately after initialization if page is visible
     if (_isPageVisible) {
       _startRecording();
     }
@@ -168,14 +219,12 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
       await controller!.setExposureOffset(value);
       setState(() {
         _exposureCompensation = value;
-        _sliderExposureValue = value; // Update slider value
+        _sliderExposureValue = value;
       });
       print('Set exposure compensation to: $value');
     } catch (e) {
-      // Don't update if setting failed, but update slider to reflect actual value
       setState(() {
-        _sliderExposureValue =
-            _exposureCompensation; // Reset slider to last known good value
+        _sliderExposureValue = _exposureCompensation;
       });
       print('Error setting exposure compensation: $e');
     }
@@ -193,13 +242,10 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Exposure icon
           const Icon(Icons.wb_sunny_outlined, color: Colors.white, size: 16),
           const SizedBox(height: 4),
-
-          // Current value display
           Text(
-            _sliderExposureValue.toStringAsFixed(1), // Show slider value
+            _sliderExposureValue.toStringAsFixed(1),
             style: const TextStyle(
               color: Colors.white,
               fontSize: 10,
@@ -207,11 +253,9 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
             ),
           ),
           const SizedBox(height: 6),
-
-          // Vertical slider
           Expanded(
             child: RotatedBox(
-              quarterTurns: -1, // Rotate 90 degrees counter-clockwise
+              quarterTurns: -1,
               child: SliderTheme(
                 data: SliderTheme.of(context).copyWith(
                   activeTrackColor: Colors.white,
@@ -225,7 +269,6 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
                 ),
                 child: Slider(
                   value: _sliderExposureValue,
-                  // Use separate slider value
                   min: _minExposureCompensation,
                   max: _maxExposureCompensation,
                   divisions:
@@ -234,23 +277,21 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
                           .round(),
                   onChanged: (value) {
                     setState(() {
-                      _sliderExposureValue = value; // Update slider immediately
+                      _sliderExposureValue = value;
                     });
-                    _setExposureCompensation(value); // Then try to set camera
+                    _setExposureCompensation(value);
                   },
                 ),
               ),
             ),
           ),
           const SizedBox(height: 6),
-
-          // Reset button
           GestureDetector(
             onTap: () {
               setState(() {
-                _sliderExposureValue = 0.0; // Reset slider immediately
+                _sliderExposureValue = 0.0;
               });
-              _setExposureCompensation(0.0); // Then reset camera
+              _setExposureCompensation(0.0);
             },
             child: Container(
               width: 24,
@@ -278,7 +319,7 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
-    final cacheManager = ref.read(imageCacheProvider);
+    final cacheManager = imageCacheManager;
 
     return FutureBuilder<void>(
       future: _initializeControllerFuture,
@@ -288,10 +329,13 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
             children: [
               NativeDeviceOrientationReader(
                 builder: (context) {
-                  _currentOrientation = NativeDeviceOrientationReader.orientation(context).deviceOrientation ?? DeviceOrientation.portraitUp;
-
+                  _currentOrientation =
+                      NativeDeviceOrientationReader.orientation(
+                        context,
+                      ).deviceOrientation ??
+                      DeviceOrientation.portraitUp;
                   return CameraPreview(controller!);
-                }
+                },
               ),
               Column(
                 children: [
@@ -312,8 +356,31 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Image Count: ${cacheManager.cacheSize} | FPS: $_fps | Cache: ${cacheManager.getCacheMemoryUsageMB().toStringAsFixed(1)}MB',
+                            'Image Count: ${cacheManager.cacheSize.value} | FPS: $_fps | Cache: ${cacheManager.getCacheMemoryUsageMB().toStringAsFixed(1)}MB',
                             style: const TextStyle(color: Colors.white),
+                          ),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.volume_up,
+                                color:
+                                    _volumeButtonsEnabled
+                                        ? Colors.green
+                                        : Colors.orange,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Volume shutter: ${_volumeButtonsEnabled ? "Active" : "Inactive"}',
+                                style: TextStyle(
+                                  color:
+                                      _volumeButtonsEnabled
+                                          ? Colors.green
+                                          : Colors.orange,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
                           ),
                           if (!_isPageVisible || !isRecording)
                             const Text(
@@ -325,14 +392,12 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
                     ),
                   ),
                   const Spacer(),
-                  // Camera shutter button section
                   Padding(
                     padding: const EdgeInsets.only(bottom: 50),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         const Spacer(),
-                        // Shutter button
                         GestureDetector(
                           onTap: _onShutterPressed,
                           child: Container(
@@ -358,17 +423,14 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
                   ),
                 ],
               ),
-
-              // Vertical exposure slider in bottom-right corner
               Positioned(
-                bottom: 140, // Above the shutter button
+                bottom: 140,
                 right: 16,
                 child: _buildVerticalExposureSlider(),
               ),
             ],
           );
         } else {
-          // Otherwise, display a loading indicator.
           return const Center(child: CircularProgressIndicator());
         }
       },
@@ -376,28 +438,26 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
   }
 
   void _onShutterPressed() {
-    final cacheManager = ref.read(imageCacheProvider);
-    if (cacheManager.cacheSize > 0) {
+    final cacheManager = imageCacheManager;
+    if (cacheManager.cacheSize.value > 0) {
       _openGallery();
     }
   }
 
   void _openGallery() {
-    final cacheManager = ref.read(imageCacheProvider);
-    if (cacheManager.cacheSize == 0) return;
-
+    final cacheManager = imageCacheManager;
+    if (cacheManager.cacheSize.value == 0) return;
     context.goNamed(Pages.gallery);
   }
 
   void _startRecording() async {
     if (controller == null || !controller!.value.isInitialized) return;
-    final cacheManager = ref.read(imageCacheProvider);
+    final cacheManager = imageCacheManager;
 
     try {
       await controller!.startImageStream((CameraImage image) async {
         if (!mounted) return;
 
-        // Get the actual device orientation
         DeviceOrientation orientation = _currentOrientation;
 
         cacheManager.addImage(
@@ -414,25 +474,6 @@ class CameraPageState extends ConsumerState<CameraPage> with RouteAware {
       print('Error starting recording: $e');
     }
   }
-
-  // Future<DeviceOrientation> _getDeviceOrientation() async {
-  //   if (!context.mounted) {
-  //     return DeviceOrientation.portraitUp;
-  //   }
-  //
-  //   return (await NativeDeviceOrientationCommunicator().orientation(
-  //         useSensor: true,
-  //       )).deviceOrientation ??
-  //       DeviceOrientation.portraitUp;
-  //
-  //   switch (MediaQuery.orientationOf(context)) {
-  //     case Orientation.portrait:
-  //       // You might want to use device sensors here for more accurate detection
-  //       return DeviceOrientation.portraitUp;
-  //     case Orientation.landscape:
-  //       return DeviceOrientation.landscapeLeft;
-  //   }
-  // }
 
   void _stopRecording() async {
     if (controller == null ||

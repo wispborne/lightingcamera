@@ -1,0 +1,5 @@
+context: |
+  Flutter camera app ("Lightning Camera") that continuously streams camera frames
+  into an in-memory cache, lets the user "shutter" to freeze the cache, then browse
+  and save images from a gallery view.  Uses go_router for navigation and native FFI
+  for YUV→RGB conversion.

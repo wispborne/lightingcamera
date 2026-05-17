@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lightingcamera/camera/camera_page.dart';
 import 'package:lightingcamera/camera/gallery_page.dart';
 
 void main() {
-  runApp(ProviderScope(child: const MyApp()));
+  runApp(const MyApp());
 }
 
 class Pages {
