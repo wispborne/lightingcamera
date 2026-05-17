@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img_lib;
 import 'package:lightingcamera/camera/image_cache_manager.dart';
 import 'package:lightingcamera/main.dart';
 import 'package:native_device_orientation/native_device_orientation.dart';
+import 'package:lightingcamera/utils/logging.dart';
 import 'package:volume_controller/volume_controller.dart';
 
 class CameraPage extends StatefulWidget {
@@ -77,7 +78,7 @@ class CameraPageState extends State<CameraPage>
 
       _isVolumeControllerInitialized = true;
     } catch (e) {
-      print('Error initializing volume controller: $e');
+      Fimber.e('Error initializing volume controller: $e', ex: e);
     }
   }
 
@@ -244,12 +245,12 @@ class CameraPageState extends State<CameraPage>
         _exposureCompensation = value;
         _sliderExposureValue = value;
       });
-      print('Set exposure compensation to: $value');
+      Fimber.i('Set exposure compensation to: $value');
     } catch (e) {
       setState(() {
         _sliderExposureValue = _exposureCompensation;
       });
-      print('Error setting exposure compensation: $e');
+      Fimber.e('Error setting exposure compensation: $e', ex: e);
     }
   }
 
@@ -494,7 +495,7 @@ class CameraPageState extends State<CameraPage>
         isRecording = true;
       });
     } catch (e) {
-      print('Error starting recording: $e');
+      Fimber.e('Error starting recording: $e', ex: e);
     }
   }
 
@@ -512,7 +513,7 @@ class CameraPageState extends State<CameraPage>
         isRecording = false;
       });
     } catch (e) {
-      print('Error stopping recording: $e');
+      Fimber.e('Error stopping recording: $e', ex: e);
     }
   }
 }

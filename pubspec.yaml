@@ -40,6 +40,7 @@ dependencies:
   go_router: ^17.2.3
   native_device_orientation: ^2.1.0
   volume_controller: ^3.5.0
+  logger: ^2.7.0
 
 
 dev_dependencies:

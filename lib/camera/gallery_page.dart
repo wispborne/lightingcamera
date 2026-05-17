@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img_lib;
 import 'package:lightingcamera/camera/image_converter.dart';
 import 'package:lightingcamera/main.dart';
+import 'package:lightingcamera/utils/logging.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'image_cache_manager.dart';
@@ -58,7 +59,7 @@ class _GalleryPageState extends State<GalleryPage> {
         });
       }
     } catch (e) {
-      print('Error converting image $index: $e');
+      Fimber.e('Error converting image $index: $e', ex: e);
       if (mounted) {
         _currentlyConverting.remove(index);
       }
@@ -74,7 +75,7 @@ class _GalleryPageState extends State<GalleryPage> {
       }
       return null;
     } catch (e) {
-      print('Error in _convertCameraImageToUIImage: $e');
+      Fimber.e('Error in _convertCameraImageToUIImage: $e', ex: e);
       return null;
     }
   }

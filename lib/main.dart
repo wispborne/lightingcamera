@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lightingcamera/camera/camera_page.dart';
 import 'package:lightingcamera/camera/gallery_page.dart';
+import 'package:lightingcamera/utils/logging.dart';
 
 void main() {
+  configureLogging();
   runApp(const MyApp());
 }
 
