@@ -15,7 +15,8 @@ class CameraPage extends StatefulWidget {
   State<CameraPage> createState() => CameraPageState();
 }
 
-class CameraPageState extends State<CameraPage> with RouteAware {
+class CameraPageState extends State<CameraPage>
+    with RouteAware, WidgetsBindingObserver {
   CameraController? controller;
   Future<void>? _initializeControllerFuture;
   List<CameraDescription>? _cameras;
@@ -46,6 +47,7 @@ class CameraPageState extends State<CameraPage> with RouteAware {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeControllerFuture = _initializeCamera();
     _initializeVolumeController();
   }
@@ -90,12 +92,33 @@ class CameraPageState extends State<CameraPage> with RouteAware {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     routeObserver.unsubscribe(this);
     _volumeController?.removeListener();
-    // Restore system volume UI when leaving
     _volumeController?.showSystemUI = true;
+    if (isRecording) {
+      controller?.stopImageStream();
+    }
     controller?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (controller == null || !controller!.value.isInitialized) return;
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      if (isRecording) {
+        _stopRecording();
+      }
+    } else if (state == AppLifecycleState.resumed) {
+      if (_isPageVisible && !isRecording) {
+        _startRecording();
+      }
+    }
   }
 
   // RouteAware methods
