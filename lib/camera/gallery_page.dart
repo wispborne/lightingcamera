@@ -23,6 +23,9 @@ class _GalleryPageState extends State<GalleryPage> {
   final Map<int, ProcessedImage> _displayImages = {};
   final Set<int> _currentlyConverting = {};
   final int _batchSize = 3;
+  bool _selectionMode = false;
+  final Set<int> _selectedIndices = {};
+  int _generation = 0;
 
   @override
   void initState() {
@@ -48,11 +51,12 @@ class _GalleryPageState extends State<GalleryPage> {
   }
 
   Future<void> _convertSingleImage(int index) async {
+    final gen = _generation;
     try {
       final timestampedImage = images[index];
       final displayImage = await _convertCameraImageToUIImage(timestampedImage);
 
-      if (mounted && displayImage != null) {
+      if (mounted && displayImage != null && _generation == gen) {
         setState(() {
           _displayImages[index] = displayImage;
           _currentlyConverting.remove(index);
@@ -60,7 +64,7 @@ class _GalleryPageState extends State<GalleryPage> {
       }
     } catch (e) {
       Fimber.e('Error converting image $index: $e', ex: e);
-      if (mounted) {
+      if (mounted && _generation == gen) {
         _currentlyConverting.remove(index);
       }
     }
@@ -86,102 +90,287 @@ class _GalleryPageState extends State<GalleryPage> {
       canPop: false, // Prevent automatic popping
       onPopInvokedWithResult: (bool didPop, dynamic result) {
         if (!didPop) {
-          _showExitDialog();
+          if (_selectionMode) {
+            _exitSelectionMode();
+          } else {
+            _showExitDialog();
+          }
         }
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text('Gallery (${images.length} images)'),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: _showExitDialog,
+          title: Text(
+            _selectionMode
+                ? '${_selectedIndices.length} selected'
+                : 'Gallery (${images.length} images)',
           ),
-          backgroundColor: Colors.black87,
+          leading: IconButton(
+            icon: Icon(_selectionMode ? Icons.close : Icons.arrow_back),
+            onPressed: _selectionMode ? _exitSelectionMode : _showExitDialog,
+          ),
+          actions: _selectionMode
+              ? [
+                  IconButton(
+                    icon: const Icon(Icons.check_circle_outline),
+                    tooltip: 'Keep selected',
+                    onPressed: _selectedIndices.isNotEmpty
+                        ? _keepSelected
+                        : null,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    tooltip: 'Delete selected',
+                    onPressed: _selectedIndices.isNotEmpty
+                        ? _deleteSelected
+                        : null,
+                  ),
+                ]
+              : null,
+          backgroundColor: _selectionMode
+              ? Colors.deepPurple.shade900
+              : Colors.black87,
           foregroundColor: Colors.white,
         ),
         backgroundColor: Colors.black,
-        body:
-            images.isEmpty
-                ? const Center(
-                  child: Text(
-                    'No images to display',
-                    style: TextStyle(color: Colors.white),
-                  ),
-                )
-                : GridView.builder(
-                  padding: const EdgeInsets.all(2),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    mainAxisSpacing: 2,
-                    crossAxisSpacing: 2,
-                    childAspectRatio: 1,
-                  ),
-                  itemCount: images.length,
-                  itemBuilder: (context, index) {
-                    // Lazy load more images as user scrolls
-                    if (index >=
-                        _displayImages.length + _currentlyConverting.length) {
-                      _convertImageBatch(index, _batchSize);
-                    }
+        body: images.isEmpty
+            ? const Center(
+                child: Text(
+                  'No images to display',
+                  style: TextStyle(color: Colors.white),
+                ),
+              )
+            : GridView.builder(
+                padding: const EdgeInsets.all(2),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  mainAxisSpacing: 2,
+                  crossAxisSpacing: 2,
+                  childAspectRatio: 1,
+                ),
+                itemCount: images.length,
+                itemBuilder: (context, index) {
+                  if (index >=
+                      _displayImages.length + _currentlyConverting.length) {
+                    _convertImageBatch(index, _batchSize);
+                  }
 
-                    final displayImage = _displayImages[index];
-                    final isConverting = _currentlyConverting.contains(index);
+                  final displayImage = _displayImages[index];
+                  final isConverting = _currentlyConverting.contains(index);
+                  final isSelected = _selectedIndices.contains(index);
 
-                    return GestureDetector(
-                      onTap:
-                          displayImage != null
-                              ? () => _showFullscreenImage(
+                  Widget tileContent;
+                  if (displayImage != null) {
+                    tileContent = ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: FutureBuilder(
+                        future: displayImage.displayableBytes,
+                        builder: (context, asyncSnapshot) =>
+                            !asyncSnapshot.hasData
+                            ? const Center(child: CircularProgressIndicator())
+                            : Image.memory(asyncSnapshot.requireData),
+                      ),
+                    );
+                  } else if (isConverting) {
+                    tileContent = const Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      ),
+                    );
+                  } else {
+                    tileContent = const Center(
+                      child: Icon(Icons.image, color: Colors.white54, size: 30),
+                    );
+                  }
+
+                  return GestureDetector(
+                    onTap: displayImage != null
+                        ? () {
+                            if (_selectionMode) {
+                              setState(() {
+                                if (isSelected) {
+                                  _selectedIndices.remove(index);
+                                  if (_selectedIndices.isEmpty) {
+                                    _selectionMode = false;
+                                  }
+                                } else {
+                                  _selectedIndices.add(index);
+                                }
+                              });
+                            } else {
+                              _showFullscreenImage(
                                 context,
                                 _displayImages[index]!,
                                 index,
-                              )
-                              : null,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(4),
-                          color: Colors.grey[900],
-                        ),
-                        child:
-                            displayImage != null
-                                ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(4),
-                                  child: FutureBuilder(
-                                    future: displayImage.displayableBytes,
-                                    builder:
-                                        (context, asyncSnapshot) =>
-                                            !asyncSnapshot.hasData
-                                                ? const Center(
-                                                  child:
-                                                      CircularProgressIndicator(),
-                                                )
-                                                : Image.memory(
-                                                  asyncSnapshot.requireData,
-                                                ),
-                                  ),
-                                )
-                                : Center(
-                                  child:
-                                      isConverting
-                                          ? const SizedBox(
-                                            width: 20,
-                                            height: 20,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.white,
-                                            ),
-                                          )
-                                          : const Icon(
-                                            Icons.image,
-                                            color: Colors.white54,
-                                            size: 30,
-                                          ),
-                                ),
+                              );
+                            }
+                          }
+                        : null,
+                    onLongPress: displayImage != null && !_selectionMode
+                        ? () {
+                            setState(() {
+                              _selectionMode = true;
+                              _selectedIndices.add(index);
+                            });
+                          }
+                        : null,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(4),
+                        color: Colors.grey[900],
                       ),
-                    );
-                  },
-                ),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          tileContent,
+                          if (_selectionMode && !isSelected)
+                            Container(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(4),
+                                color: Colors.black.withOpacity(0.4),
+                              ),
+                            ),
+                          if (_selectionMode)
+                            Positioned(
+                              top: 4,
+                              right: 4,
+                              child: Container(
+                                width: 24,
+                                height: 24,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: isSelected
+                                      ? Colors.deepPurple
+                                      : Colors.black54,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: isSelected
+                                    ? const Icon(
+                                        Icons.check,
+                                        color: Colors.white,
+                                        size: 16,
+                                      )
+                                    : null,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
       ),
     );
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedIndices.clear();
+    });
+  }
+
+  void _deleteSelected() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Delete selected?'),
+          content: Text(
+            'Delete ${_selectedIndices.length} image${_selectedIndices.length == 1 ? '' : 's'}? '
+            'This cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _applyDeletion(Set<int>.from(_selectedIndices));
+              },
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _keepSelected() {
+    final toRemoveCount = images.length - _selectedIndices.length;
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Keep selected?'),
+          content: Text(
+            'Keep ${_selectedIndices.length} image${_selectedIndices.length == 1 ? '' : 's'} '
+            'and delete the remaining $toRemoveCount?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                final allIndices = List.generate(
+                  images.length,
+                  (i) => i,
+                ).toSet();
+                _applyDeletion(allIndices.difference(_selectedIndices));
+              },
+              child: const Text('Keep'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _applyDeletion(Set<int> indicesToRemove) {
+    if (indicesToRemove.isEmpty) return;
+
+    imageCacheManager.removeAtIndices(indicesToRemove);
+
+    final newImages = <ImageWithMetadata>[];
+    final newDisplayImages = <int, ProcessedImage>{};
+    int newIndex = 0;
+
+    for (int oldIndex = 0; oldIndex < images.length; oldIndex++) {
+      if (!indicesToRemove.contains(oldIndex)) {
+        newImages.add(images[oldIndex]);
+        if (_displayImages.containsKey(oldIndex)) {
+          newDisplayImages[newIndex] = _displayImages[oldIndex]!;
+        }
+        newIndex++;
+      }
+    }
+
+    _generation++;
+
+    setState(() {
+      images = newImages;
+      _displayImages.clear();
+      _displayImages.addAll(newDisplayImages);
+      _currentlyConverting.clear();
+      _selectionMode = false;
+      _selectedIndices.clear();
+    });
+
+    if (images.isNotEmpty) {
+      _convertImageBatch(0, _batchSize);
+    }
   }
 
   void _showExitDialog() {
@@ -219,11 +408,11 @@ class _GalleryPageState extends State<GalleryPage> {
   ) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder:
-            (context) => FullscreenImagePage(
-              timestampedImage: timestampedImage,
-              imageIndex: index,
-            ),
+        builder: (context) => FullscreenImagePage(
+          displayImages: _displayImages,
+          rawImages: images,
+          initialIndex: index,
+        ),
       ),
     );
   }
@@ -238,15 +427,77 @@ class _GalleryPageState extends State<GalleryPage> {
   }
 }
 
-class FullscreenImagePage extends StatelessWidget {
-  final ProcessedImage timestampedImage;
-  final int imageIndex;
+class FullscreenImagePage extends StatefulWidget {
+  final Map<int, ProcessedImage> displayImages;
+  final List<ImageWithMetadata> rawImages;
+  final int initialIndex;
 
   const FullscreenImagePage({
     super.key,
-    required this.timestampedImage,
-    required this.imageIndex,
+    required this.displayImages,
+    required this.rawImages,
+    required this.initialIndex,
   });
+
+  @override
+  State<FullscreenImagePage> createState() => _FullscreenImagePageState();
+}
+
+class _FullscreenImagePageState extends State<FullscreenImagePage> {
+  late final PageController _pageController;
+  late int _currentIndex;
+  final Map<int, ProcessedImage> _localConverted = {};
+  final Set<int> _converting = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: widget.initialIndex);
+    _ensureAdjacentConverted(widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  ProcessedImage? _getImage(int index) {
+    return widget.displayImages[index] ?? _localConverted[index];
+  }
+
+  void _ensureAdjacentConverted(int index) {
+    for (final i in [index - 1, index + 1]) {
+      if (i >= 0 &&
+          i < widget.rawImages.length &&
+          _getImage(i) == null &&
+          !_converting.contains(i)) {
+        _convertImage(i);
+      }
+    }
+  }
+
+  Future<void> _convertImage(int index) async {
+    _converting.add(index);
+    try {
+      final raw = widget.rawImages[index];
+      if (raw.image.format.group == ImageFormatGroup.yuv420) {
+        final result = await ImageConverter.processImage(raw);
+        if (mounted && result != null) {
+          setState(() {
+            _localConverted[index] = result;
+            _converting.remove(index);
+          });
+        }
+      }
+    } catch (e) {
+      Fimber.e('Error converting image $index in fullscreen: $e', ex: e);
+      if (mounted) {
+        setState(() => _converting.remove(index));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -256,67 +507,83 @@ class FullscreenImagePage extends StatelessWidget {
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        title: Text(
+          '${_currentIndex + 1} / ${widget.rawImages.length}',
+          style: const TextStyle(color: Colors.white70, fontSize: 16),
+        ),
+        centerTitle: true,
         actions: [
           IconButton(
             icon: const Icon(Icons.save),
-            onPressed: () => _saveImage(context),
+            onPressed: () => _saveImage(context, _currentIndex),
           ),
         ],
       ),
-      body: Center(
-        child: InteractiveViewer(
-          child: FutureBuilder(
-            future: timestampedImage.displayableBytes,
-            builder:
-                (context, asyncSnapshot) =>
-                    !asyncSnapshot.hasData
-                        ? const Center(child: CircularProgressIndicator())
-                        : Image.memory(asyncSnapshot.requireData),
-          ),
-        ),
+      body: PageView.builder(
+        controller: _pageController,
+        itemCount: widget.rawImages.length,
+        onPageChanged: (index) {
+          setState(() => _currentIndex = index);
+          _ensureAdjacentConverted(index);
+        },
+        itemBuilder: (context, index) {
+          final image = _getImage(index);
+          if (image == null) {
+            if (!_converting.contains(index)) {
+              _convertImage(index);
+            }
+            return const Center(
+              child: CircularProgressIndicator(color: Colors.white),
+            );
+          }
+          return Center(
+            child: InteractiveViewer(
+              child: FutureBuilder(
+                future: image.displayableBytes,
+                builder: (context, asyncSnapshot) => !asyncSnapshot.hasData
+                    ? const Center(child: CircularProgressIndicator())
+                    : Image.memory(asyncSnapshot.requireData),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
 
-  Future<void> _saveImage(BuildContext context) async {
-    try {
-      // Check current permission status
-      PermissionStatus permission = await Permission.photos.status;
+  Future<void> _saveImage(BuildContext context, int index) async {
+    final image = _getImage(index);
+    if (image == null) return;
 
-      // If permission is not granted, request it
+    try {
+      PermissionStatus permission = await Permission.photos.status;
       if (!permission.isGranted) {
         permission = await Permission.photos.request();
       }
 
-      // Handle different permission states
       if (permission.isGranted || permission.isLimited) {
-        final img_lib.Image image = timestampedImage.image;
-        if (image != null) {
-          final bytes = Uint8List.fromList(
-            img_lib.encodeJpg(image, quality: 95),
-          );
+        final bytes = Uint8List.fromList(
+          img_lib.encodeJpg(image.image, quality: 95),
+        );
 
-          await Gal.putImageBytes(
-            bytes,
-            name: 'camera_image_${DateTime.now().millisecondsSinceEpoch}.jpg',
-          );
+        await Gal.putImageBytes(
+          bytes,
+          name: 'camera_image_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        );
 
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Image saved to gallery successfully!'),
-                backgroundColor: Colors.green,
-              ),
-            );
-          }
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Image saved to gallery successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
         }
       } else if (permission.isPermanentlyDenied) {
-        // User has permanently denied permission, show dialog to go to settings
         if (context.mounted) {
           _showPermissionDialog(context);
         }
       } else {
-        // Permission denied
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(

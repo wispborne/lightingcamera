@@ -68,6 +68,15 @@ class ImageCacheManager {
     _sequenceCounter = 0;
   }
 
+  void removeAtIndices(Set<int> indices) {
+    final sorted = indices.toList()..sort((a, b) => b.compareTo(a));
+    for (final index in sorted) {
+      if (index >= 0 && index < _cachedImages.length) {
+        _cachedImages.removeAt(index);
+      }
+    }
+  }
+
   CameraImage? get latestImage =>
       _cachedImages.isNotEmpty ? _cachedImages.last.image : null;
 
