@@ -11,7 +11,7 @@ static inline int clamp(int value, int min, int max) {
  * @param y_plane        Pointer to Y plane.
  * @param u_plane        Pointer to U plane.
  * @param v_plane        Pointer to V plane.
- * @param rgb_output     Pointer to RGB output buffer (size: width * height * 3).
+ * @param rgb_output     Pointer to RGBA output buffer (size: width * height * 4).
  * @param width          Source image width.
  * @param height         Source image height.
  * @param uv_row_stride  Row stride for U/V planes.
@@ -73,10 +73,11 @@ void convert_yuv_to_rgb(
                     break;
             }
 
-            int dest_index = (dest_y * dest_width + dest_x) * 3;
+            int dest_index = (dest_y * dest_width + dest_x) * 4;
             rgb_output[dest_index] = clamp(r, 0, 255);
             rgb_output[dest_index + 1] = clamp(g, 0, 255);
             rgb_output[dest_index + 2] = clamp(b, 0, 255);
+            rgb_output[dest_index + 3] = 255;
         }
     }
 }

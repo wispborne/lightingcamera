@@ -159,7 +159,8 @@
       "mcp__2d723961-c89d-4bff-8ba8-0bc0ea5eb3c4__find_projects",
       "Bash(awk 'NR>=778 && NR<=900 {print NR\": \"$0}' F:/Code/Starsector/TriOS/lib/catalog/mod_browser_page.dart)",
       "Bash(fvm flutter *)",
-      "mcp__idea__get_file_problems"
+      "mcp__idea__get_file_problems",
+      "PowerShell(flutter pub get 2>&1)"
     ]
   }
 }

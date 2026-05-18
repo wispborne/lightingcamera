@@ -105,6 +105,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.6"
+  drag_select_grid_view:
+    dependency: "direct main"
+    description:
+      name: drag_select_grid_view
+      sha256: "6999effb60db70b03880d281fb4cf271c2044eef6b460ad5fc26a78863a7885b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.7.6"
   fake_async:
     dependency: transitive
     description:

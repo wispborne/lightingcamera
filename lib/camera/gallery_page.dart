@@ -1,4 +1,7 @@
+import 'dart:ui' as ui;
+
 import 'package:camera/camera.dart';
+import 'package:drag_select_grid_view/drag_select_grid_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
@@ -23,19 +26,24 @@ class _GalleryPageState extends State<GalleryPage> {
   final Map<int, ProcessedImage> _displayImages = {};
   final Set<int> _currentlyConverting = {};
   final int _batchSize = 3;
-  bool _selectionMode = false;
-  final Set<int> _selectedIndices = {};
+  final _gridController = DragSelectGridViewController();
   int _generation = 0;
+
+  bool get _isSelecting => _gridController.value.isSelecting;
+  Set<int> get _selectedIndexes => _gridController.value.selectedIndexes;
 
   @override
   void initState() {
     super.initState();
+    _gridController.addListener(_onSelectionChanged);
     images = imageCacheManager.getTimestampedImages();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _convertImageBatch(0, _batchSize);
     });
   }
+
+  void _onSelectionChanged() => setState(() {});
 
   Future<void> _convertImageBatch(int start, int count) async {
     final end = (start + count).clamp(0, images.length);
@@ -87,10 +95,10 @@ class _GalleryPageState extends State<GalleryPage> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: false, // Prevent automatic popping
+      canPop: false,
       onPopInvokedWithResult: (bool didPop, dynamic result) {
         if (!didPop) {
-          if (_selectionMode) {
+          if (_isSelecting) {
             _exitSelectionMode();
           } else {
             _showExitDialog();
@@ -100,33 +108,33 @@ class _GalleryPageState extends State<GalleryPage> {
       child: Scaffold(
         appBar: AppBar(
           title: Text(
-            _selectionMode
-                ? '${_selectedIndices.length} selected'
+            _isSelecting
+                ? '${_selectedIndexes.length} selected'
                 : 'Gallery (${images.length} images)',
           ),
           leading: IconButton(
-            icon: Icon(_selectionMode ? Icons.close : Icons.arrow_back),
-            onPressed: _selectionMode ? _exitSelectionMode : _showExitDialog,
+            icon: Icon(_isSelecting ? Icons.close : Icons.arrow_back),
+            onPressed: _isSelecting ? _exitSelectionMode : _showExitDialog,
           ),
-          actions: _selectionMode
+          actions: _isSelecting
               ? [
                   IconButton(
                     icon: const Icon(Icons.check_circle_outline),
                     tooltip: 'Keep selected',
-                    onPressed: _selectedIndices.isNotEmpty
+                    onPressed: _selectedIndexes.isNotEmpty
                         ? _keepSelected
                         : null,
                   ),
                   IconButton(
                     icon: const Icon(Icons.delete_outline),
                     tooltip: 'Delete selected',
-                    onPressed: _selectedIndices.isNotEmpty
+                    onPressed: _selectedIndexes.isNotEmpty
                         ? _deleteSelected
                         : null,
                   ),
                 ]
               : null,
-          backgroundColor: _selectionMode
+          backgroundColor: _isSelecting
               ? Colors.deepPurple.shade900
               : Colors.black87,
           foregroundColor: Colors.white,
@@ -139,7 +147,8 @@ class _GalleryPageState extends State<GalleryPage> {
                   style: TextStyle(color: Colors.white),
                 ),
               )
-            : GridView.builder(
+            : DragSelectGridView(
+                gridController: _gridController,
                 padding: const EdgeInsets.all(2),
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 3,
@@ -148,7 +157,9 @@ class _GalleryPageState extends State<GalleryPage> {
                   childAspectRatio: 1,
                 ),
                 itemCount: images.length,
-                itemBuilder: (context, index) {
+                triggerSelectionOnTap: false,
+                impliesAppBarDismissal: false,
+                itemBuilder: (context, index, selected) {
                   if (index >=
                       _displayImages.length + _currentlyConverting.length) {
                     _convertImageBatch(index, _batchSize);
@@ -156,18 +167,20 @@ class _GalleryPageState extends State<GalleryPage> {
 
                   final displayImage = _displayImages[index];
                   final isConverting = _currentlyConverting.contains(index);
-                  final isSelected = _selectedIndices.contains(index);
 
                   Widget tileContent;
                   if (displayImage != null) {
                     tileContent = ClipRRect(
                       borderRadius: BorderRadius.circular(4),
-                      child: FutureBuilder(
-                        future: displayImage.displayableBytes,
+                      child: FutureBuilder<ui.Image>(
+                        future: displayImage.displayImage,
                         builder: (context, asyncSnapshot) =>
                             !asyncSnapshot.hasData
                             ? const Center(child: CircularProgressIndicator())
-                            : Image.memory(asyncSnapshot.requireData),
+                            : RawImage(
+                                image: asyncSnapshot.requireData,
+                                fit: BoxFit.cover,
+                              ),
                       ),
                     );
                   } else if (isConverting) {
@@ -188,35 +201,9 @@ class _GalleryPageState extends State<GalleryPage> {
                   }
 
                   return GestureDetector(
-                    onTap: displayImage != null
-                        ? () {
-                            if (_selectionMode) {
-                              setState(() {
-                                if (isSelected) {
-                                  _selectedIndices.remove(index);
-                                  if (_selectedIndices.isEmpty) {
-                                    _selectionMode = false;
-                                  }
-                                } else {
-                                  _selectedIndices.add(index);
-                                }
-                              });
-                            } else {
-                              _showFullscreenImage(
-                                context,
-                                _displayImages[index]!,
-                                index,
-                              );
-                            }
-                          }
-                        : null,
-                    onLongPress: displayImage != null && !_selectionMode
-                        ? () {
-                            setState(() {
-                              _selectionMode = true;
-                              _selectedIndices.add(index);
-                            });
-                          }
+                    onTap: (!_isSelecting && displayImage != null)
+                        ? () => _showFullscreenImage(
+                              context, displayImage, index)
                         : null,
                     child: Container(
                       decoration: BoxDecoration(
@@ -227,14 +214,14 @@ class _GalleryPageState extends State<GalleryPage> {
                         fit: StackFit.expand,
                         children: [
                           tileContent,
-                          if (_selectionMode && !isSelected)
+                          if (_isSelecting && !selected)
                             Container(
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(4),
                                 color: Colors.black.withOpacity(0.4),
                               ),
                             ),
-                          if (_selectionMode)
+                          if (_isSelecting)
                             Positioned(
                               top: 4,
                               right: 4,
@@ -243,7 +230,7 @@ class _GalleryPageState extends State<GalleryPage> {
                                 height: 24,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: isSelected
+                                  color: selected
                                       ? Colors.deepPurple
                                       : Colors.black54,
                                   border: Border.all(
@@ -251,7 +238,7 @@ class _GalleryPageState extends State<GalleryPage> {
                                     width: 2,
                                   ),
                                 ),
-                                child: isSelected
+                                child: selected
                                     ? const Icon(
                                         Icons.check,
                                         color: Colors.white,
@@ -271,10 +258,7 @@ class _GalleryPageState extends State<GalleryPage> {
   }
 
   void _exitSelectionMode() {
-    setState(() {
-      _selectionMode = false;
-      _selectedIndices.clear();
-    });
+    _gridController.clear();
   }
 
   void _deleteSelected() {
@@ -284,7 +268,7 @@ class _GalleryPageState extends State<GalleryPage> {
         return AlertDialog(
           title: const Text('Delete selected?'),
           content: Text(
-            'Delete ${_selectedIndices.length} image${_selectedIndices.length == 1 ? '' : 's'}? '
+            'Delete ${_selectedIndexes.length} image${_selectedIndexes.length == 1 ? '' : 's'}? '
             'This cannot be undone.',
           ),
           actions: [
@@ -295,7 +279,7 @@ class _GalleryPageState extends State<GalleryPage> {
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                _applyDeletion(Set<int>.from(_selectedIndices));
+                _applyDeletion(Set<int>.from(_selectedIndexes));
               },
               child: const Text('Delete'),
             ),
@@ -306,14 +290,14 @@ class _GalleryPageState extends State<GalleryPage> {
   }
 
   void _keepSelected() {
-    final toRemoveCount = images.length - _selectedIndices.length;
+    final toRemoveCount = images.length - _selectedIndexes.length;
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
           title: const Text('Keep selected?'),
           content: Text(
-            'Keep ${_selectedIndices.length} image${_selectedIndices.length == 1 ? '' : 's'} '
+            'Keep ${_selectedIndexes.length} image${_selectedIndexes.length == 1 ? '' : 's'} '
             'and delete the remaining $toRemoveCount?',
           ),
           actions: [
@@ -328,7 +312,7 @@ class _GalleryPageState extends State<GalleryPage> {
                   images.length,
                   (i) => i,
                 ).toSet();
-                _applyDeletion(allIndices.difference(_selectedIndices));
+                _applyDeletion(allIndices.difference(_selectedIndexes));
               },
               child: const Text('Keep'),
             ),
@@ -354,18 +338,19 @@ class _GalleryPageState extends State<GalleryPage> {
           newDisplayImages[newIndex] = _displayImages[oldIndex]!;
         }
         newIndex++;
+      } else {
+        _displayImages[oldIndex]?.dispose();
       }
     }
 
     _generation++;
+    _gridController.clear();
 
     setState(() {
       images = newImages;
       _displayImages.clear();
       _displayImages.addAll(newDisplayImages);
       _currentlyConverting.clear();
-      _selectionMode = false;
-      _selectedIndices.clear();
     });
 
     if (images.isNotEmpty) {
@@ -419,10 +404,11 @@ class _GalleryPageState extends State<GalleryPage> {
 
   @override
   void dispose() {
-    // Clean up ui.Image objects
-    // for (final image in _displayImages.values) {
-    //   image.dispose();
-    // }
+    _gridController.removeListener(_onSelectionChanged);
+    _gridController.dispose();
+    for (final image in _displayImages.values) {
+      image.dispose();
+    }
     super.dispose();
   }
 }
@@ -538,11 +524,11 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
           }
           return Center(
             child: InteractiveViewer(
-              child: FutureBuilder(
-                future: image.displayableBytes,
+              child: FutureBuilder<ui.Image>(
+                future: image.displayImage,
                 builder: (context, asyncSnapshot) => !asyncSnapshot.hasData
                     ? const Center(child: CircularProgressIndicator())
-                    : Image.memory(asyncSnapshot.requireData),
+                    : RawImage(image: asyncSnapshot.requireData),
               ),
             ),
           );

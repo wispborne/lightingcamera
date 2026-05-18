@@ -74,7 +74,7 @@ class YuvConverterFFI {
       final yPointer = arena<Uint8>(yPlane.length);
       final uPointer = arena<Uint8>(uPlane.length);
       final vPointer = arena<Uint8>(vPlane.length);
-      final rgbPointer = arena<Uint8>(width * height * 3);
+      final rgbPointer = arena<Uint8>(width * height * 4);
 
       // Copy data to native memory
       yPointer.asTypedList(yPlane.length).setAll(0, yPlane);
@@ -95,7 +95,7 @@ class YuvConverterFFI {
       );
 
       // Copy result back to Dart
-      return Uint8List.fromList(rgbPointer.asTypedList(width * height * 3));
+      return Uint8List.fromList(rgbPointer.asTypedList(width * height * 4));
     } finally {
       // Dispose the arena to free all allocated memory
       arena.releaseAll();

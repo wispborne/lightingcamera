@@ -1,46 +1,48 @@
+import 'dart:async';
+import 'dart:ui' as ui;
+
 import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:lightingcamera/native/yuv_converter_ffi.dart';
 
 import 'image_cache_manager.dart';
 
-/// An image that has been processed and is ready for display or saving.
 class ProcessedImage {
   final img.Image image;
+  ui.Image? _uiImage;
+  Future<ui.Image>? _uiImageFuture;
+  bool _disposed = false;
 
   ProcessedImage(this.image);
 
-  Uint8List? _cachedDisplayableBytes;
-  Future<Uint8List>? _displayableBytesCache;
-
-  Future<Uint8List> get displayableBytes {
-    // Return existing cache if available
-    if (_displayableBytesCache != null) {
-      return _displayableBytesCache!;
-    }
-
-    // If we have cached bytes, return them immediately
-    if (_cachedDisplayableBytes != null) {
-      return Future.value(_cachedDisplayableBytes!);
-    }
-
-    // Create and cache the future
-    _displayableBytesCache = _computeDisplayableBytes();
-    return _displayableBytesCache!;
+  Future<ui.Image> get displayImage {
+    if (_disposed) throw StateError('ProcessedImage has been disposed');
+    if (_uiImageFuture != null) return _uiImageFuture!;
+    _uiImageFuture = _createUiImage();
+    return _uiImageFuture!;
   }
 
-  Future<Uint8List> _computeDisplayableBytes() async {
-    // Perform the expensive operation on a separate isolate/compute
-    final bytes = await compute(_encodeImage, image);
-    _cachedDisplayableBytes = bytes;
-    return bytes;
+  Future<ui.Image> _createUiImage() {
+    final completer = Completer<ui.Image>();
+    final bytes = image.toUint8List();
+    ui.decodeImageFromPixels(
+      bytes,
+      image.width,
+      image.height,
+      ui.PixelFormat.rgba8888,
+      (ui.Image result) {
+        _uiImage = result;
+        completer.complete(result);
+      },
+    );
+    return completer.future;
   }
 
-  // Static function for compute
-  static Uint8List _encodeImage(dynamic image) {
-    return img.encodeJpg(image);
+  void dispose() {
+    _disposed = true;
+    _uiImage?.dispose();
+    _uiImage = null;
   }
 }
 
@@ -144,7 +146,7 @@ class ImageConverter {
       width: destWidth,
       height: destHeight,
       bytes: rgbData.buffer,
-      order: img.ChannelOrder.rgb,
+      order: img.ChannelOrder.rgba,
     );
   }
 
