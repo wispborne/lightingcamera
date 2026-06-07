@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="rgb(14, 22, 43)"/>
+      <stop offset="100%" stop-color="rgb(9, 14, 30)"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="rgb(73, 252, 255)"/>
+      <stop offset="100%" stop-color="rgb(59, 203, 232)"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="rgb(73, 252, 255)"/>
+      <stop offset="100%" stop-color="rgb(59, 203, 232)"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Rounded square background -->
+  <rect x="16" y="16" width="480" height="480" rx="96" ry="96" fill="url(#bg)"/>
+
+  <!-- Camera body -->
+  <rect x="88" y="168" width="336" height="232" rx="32" ry="32" fill="rgb(32, 41, 65)" stroke="rgb(50, 62, 95)" stroke-width="4"/>
+
+  <!-- Camera top bump (viewfinder/flash) -->
+  <rect x="176" y="136" width="120" height="48" rx="12" ry="12" fill="rgb(32, 41, 65)" stroke="rgb(50, 62, 95)" stroke-width="4"/>
+
+  <!-- Lens outer ring -->
+  <circle cx="256" cy="284" r="80" fill="none" stroke="url(#lens)" stroke-width="8" opacity="0.6"/>
+
+  <!-- Lens inner ring -->
+  <circle cx="256" cy="284" r="56" fill="rgb(14, 22, 43)" stroke="rgb(50, 62, 95)" stroke-width="4"/>
+
+  <!-- Lens glass -->
+  <circle cx="256" cy="284" r="40" fill="rgb(9, 14, 30)"/>
+  <ellipse cx="244" cy="272" rx="12" ry="8" fill="rgb(73, 252, 255)" opacity="0.12" transform="rotate(-30 244 272)"/>
+
+  <!-- Lightning bolt glow layer -->
+  <polygon points="272,188 232,276 264,276 240,380 312,264 276,264 300,188" fill="url(#bolt)" opacity="0.3" filter="url(#glow)"/>
+
+  <!-- Lightning bolt -->
+  <polygon points="272,188 232,276 264,276 240,380 312,264 276,264 300,188" fill="url(#bolt)"/>
+
+  <!-- Recording dot using primary color -->
+  <circle cx="368" cy="192" r="8" fill="rgb(73, 252, 255)"/>
+</svg>

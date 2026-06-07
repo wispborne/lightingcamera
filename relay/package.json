@@ -1,0 +1,15 @@
+{
+  "name": "lightning-relay",
+  "version": "0.1.0",
+  "description": "Relay service that decodes the Blitzortung lightning feed and fans it out to Lightning Camera clients, filtered to a bounding box.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "spike": "node spike.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

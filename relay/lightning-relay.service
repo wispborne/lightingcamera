@@ -1,0 +1,25 @@
+# systemd unit for the lightning relay.
+# Copy to /etc/systemd/system/lightning-relay.service, adjust paths/user, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lightning-relay
+#   journalctl -u lightning-relay -f
+
+[Unit]
+Description=Lightning Camera relay (Blitzortung -> app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust to where you cloned the repo and the user you want it to run as:
+WorkingDirectory=/opt/lightning-relay
+ExecStart=/usr/bin/node index.js
+User=lightning
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+# Optional: point at a custom config location
+# Environment=RELAY_CONFIG=/etc/lightning-relay/config.json
+
+[Install]
+WantedBy=multi-user.target

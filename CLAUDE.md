@@ -49,3 +49,7 @@ CameraImage (YUV420)
 - Source: `native/yuv_converter.c` (YUV420 planar → RGB with 0°/90°/180°/270° rotation, integer arithmetic).
 - CMake: `android/app/src/main/cpp/CMakeLists.txt` — compiles as shared lib with `-O3 -ffast-math` and NEON on ARM.
 - NDK ABI filters: `arm64-v8a`, `armeabi-v7a`, `x86_64`.
+
+## AI Assistant Instructions
+
+- Avoid using jargon in your responses.

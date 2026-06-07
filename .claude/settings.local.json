@@ -160,7 +160,19 @@
       "Bash(awk 'NR>=778 && NR<=900 {print NR\": \"$0}' F:/Code/Starsector/TriOS/lib/catalog/mod_browser_page.dart)",
       "Bash(fvm flutter *)",
       "mcp__idea__get_file_problems",
-      "PowerShell(flutter pub get 2>&1)"
+      "PowerShell(flutter pub get 2>&1)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(gh api *)",
+      "Bash(python -c \"import sys, json; items = json.load\\(sys.stdin\\); [print\\(i['name'], i['download_url']\\) for i in items]\")",
+      "Bash(python -c \"import sys, json; tree = json.load\\(sys.stdin\\)['tree']; [print\\(t['path']\\) for t in tree if t['path'].endswith\\('.kt'\\) or t['path'].endswith\\('.java'\\)]\")",
+      "PowerShell(gh api repos/dart-tools/flutter_android_volume_keydown/git/trees/master --jq '.tree[].path' 2>&1)",
+      "WebFetch(domain:api.flutter.dev)",
+      "Bash(Get-ChildItem -Path \"F:\\\\Code\\\\lightingcamera\" -Recurse -Filter \"MainActivity.*\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object FullName)",
+      "Bash(findstr /i \"uninstall\\\\|upgrade\\\\|install\")",
+      "PowerShell($sdk = if \\($env:ANDROID_HOME\\) { $env:ANDROID_HOME } elseif \\($env:ANDROID_SDK_ROOT\\) { $env:ANDROID_SDK_ROOT } else { \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\" }; Write-Host \"SDK: $sdk\"; if \\(Test-Path \"$sdk\\\\platform-tools\\\\adb.exe\"\\) { Write-Host \"ADB: $sdk\\\\platform-tools\\\\adb.exe\" } else { Write-Host \"adb not found at expected location\" })",
+      "PowerShell(flutter analyze --no-fatal-infos 2>&1)"
     ]
   }
 }

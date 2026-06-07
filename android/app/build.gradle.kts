@@ -1,6 +1,5 @@
 plugins {
     id("com.android.application")
-    id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -11,12 +10,12 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
+        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     defaultConfig {
@@ -37,10 +36,6 @@ android {
             }
         }
 
-        // Wisp: For the native code
-        ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
-        }
     }
 
     // Wisp: For the native code
@@ -53,10 +48,19 @@ android {
 
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".dev"
+            resValue("string", "app_name", "LC Dev")
+            ndk {
+                abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
+            }
+        }
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            ndk {
+                abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            }
             signingConfig = signingConfigs.getByName("debug")
+            resValue("string", "app_name", "lightingcamera")
         }
     }
 }

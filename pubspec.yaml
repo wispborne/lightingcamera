@@ -19,8 +19,8 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: 3.10.7
-  flutter: '3.38.6'
+  sdk: 3.12.0
+  flutter: '3.44.0'
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -40,8 +40,13 @@ dependencies:
   go_router: ^17.2.3
   drag_select_grid_view: ^0.7.6
   native_device_orientation: ^2.1.0
-  volume_controller: ^3.5.0
+  wakelock_plus: ^1.6.1
   logger: ^2.7.0
+  shared_preferences: ^2.5.0
+  flutter_map: ^8.1.0
+  latlong2: ^0.9.1
+  geolocator: ^13.0.1
+  web_socket_channel: ^3.0.1
 
 
 dev_dependencies:
@@ -56,6 +61,13 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/icon_1024.png"
+  adaptive_icon_background: "#0E162B"
+  adaptive_icon_foreground: "assets/icon_1024.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

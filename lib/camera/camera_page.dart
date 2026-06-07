@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,9 +7,11 @@ import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img_lib;
 import 'package:lightingcamera/camera/image_cache_manager.dart';
 import 'package:lightingcamera/main.dart';
+import 'package:lightingcamera/settings/settings_manager.dart';
 import 'package:native_device_orientation/native_device_orientation.dart';
 import 'package:lightingcamera/utils/logging.dart';
-import 'package:volume_controller/volume_controller.dart';
+import 'package:signals/signals_flutter.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 class CameraPage extends StatefulWidget {
   const CameraPage({super.key});
@@ -17,7 +21,7 @@ class CameraPage extends StatefulWidget {
 }
 
 class CameraPageState extends State<CameraPage>
-    with RouteAware, WidgetsBindingObserver {
+    with RouteAware, WidgetsBindingObserver, TickerProviderStateMixin {
   CameraController? controller;
   Future<void>? _initializeControllerFuture;
   List<CameraDescription>? _cameras;
@@ -36,11 +40,15 @@ class CameraPageState extends State<CameraPage>
   double _minExposureCompensation = -2.0;
   double _maxExposureCompensation = 2.0;
 
-  // Volume button variables
-  VolumeController? _volumeController;
-  double _originalVolume = 0.0;
+  // Wiggle animation for reposition mode
+  late final AnimationController _wiggleController;
+  double? _dragOffsetX;
+
+  // Volume button shutter via native platform channel
+  static const _volumeKeyChannel =
+      MethodChannel('com.wisp.lightingcamera/volume_keys');
   bool _volumeButtonsEnabled = true;
-  bool _isVolumeControllerInitialized = false;
+  DateTime? _lastShutterTime;
 
   static final RouteObserver<PageRoute> routeObserver =
       RouteObserver<PageRoute>();
@@ -49,36 +57,24 @@ class CameraPageState extends State<CameraPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _wiggleController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
     _initializeControllerFuture = _initializeCamera();
-    _initializeVolumeController();
+    _volumeKeyChannel.setMethodCallHandler(_handleVolumeKey);
   }
 
-  Future<void> _initializeVolumeController() async {
-    try {
-      _volumeController = VolumeController.instance;
-
-      // Store the original volume level
-      _originalVolume = await _volumeController!.getVolume();
-
-      // Hide the system volume UI completely
-      _volumeController!.showSystemUI = false;
-
-      // Set up listener that intercepts volume changes
-      _volumeController!.addListener((newVolume) {
-        if (_volumeButtonsEnabled &&
-            _isPageVisible &&
-            _isVolumeControllerInitialized) {
-          // Immediately restore the original volume to prevent any volume change
-          _volumeController!.setVolume(_originalVolume);
-
-          // Trigger the camera shutter
-          _onShutterPressed();
-        }
-      });
-
-      _isVolumeControllerInitialized = true;
-    } catch (e) {
-      Fimber.e('Error initializing volume controller: $e', ex: e);
+  Future<dynamic> _handleVolumeKey(MethodCall call) async {
+    if (call.method == 'volumeKeyPressed' &&
+        _volumeButtonsEnabled &&
+        _isPageVisible) {
+      final now = DateTime.now();
+      if (_lastShutterTime == null ||
+          now.difference(_lastShutterTime!) > const Duration(milliseconds: 300)) {
+        _lastShutterTime = now;
+        _onShutterPressed();
+      }
     }
   }
 
@@ -95,29 +91,19 @@ class CameraPageState extends State<CameraPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     routeObserver.unsubscribe(this);
-    _volumeController?.removeListener();
-    _volumeController?.showSystemUI = true;
-    if (isRecording) {
-      controller?.stopImageStream();
-    }
-    controller?.dispose();
+    _wiggleController.dispose();
+    _volumeKeyChannel.setMethodCallHandler(null);
+    _disposeCamera();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (controller == null || !controller!.value.isInitialized) return;
-
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.detached) {
-      if (isRecording) {
-        _stopRecording();
-      }
+    if (state == AppLifecycleState.inactive) {
+      _disposeCamera();
     } else if (state == AppLifecycleState.resumed) {
-      if (_isPageVisible && !isRecording) {
-        _startRecording();
+      if (_isPageVisible) {
+        _initializeControllerFuture = _setupCamera();
       }
     }
   }
@@ -127,7 +113,6 @@ class CameraPageState extends State<CameraPage>
   void didPush() {
     _isPageVisible = true;
     _volumeButtonsEnabled = true;
-    _enableVolumeButtonOverride();
     if (!isRecording && controller != null && controller!.value.isInitialized) {
       _startRecording();
     }
@@ -137,7 +122,6 @@ class CameraPageState extends State<CameraPage>
   void didPopNext() {
     _isPageVisible = true;
     _volumeButtonsEnabled = true;
-    _enableVolumeButtonOverride();
     if (controller != null && controller!.value.isInitialized) {
       controller!.resumePreview();
     }
@@ -151,7 +135,6 @@ class CameraPageState extends State<CameraPage>
   void didPushNext() {
     _isPageVisible = false;
     _volumeButtonsEnabled = false;
-    _disableVolumeButtonOverride();
     if (isRecording) {
       _stopRecording();
     }
@@ -161,29 +144,12 @@ class CameraPageState extends State<CameraPage>
   void didPop() {
     _isPageVisible = false;
     _volumeButtonsEnabled = false;
-    _disableVolumeButtonOverride();
     if (isRecording) {
       _stopRecording();
     }
   }
 
-  void _enableVolumeButtonOverride() async {
-    if (_volumeController != null) {
-      // Store current volume when enabling override
-      _originalVolume = await _volumeController!.getVolume();
-      _volumeController!.showSystemUI = false;
-    }
-  }
-
-  void _disableVolumeButtonOverride() async {
-    if (_volumeController != null) {
-      // Re-enable system volume UI when disabling override
-      _volumeController!.showSystemUI = true;
-    }
-  }
-
   Future<void> _initializeCamera() async {
-    // Start a timer to calculate FPS
     Future.doWhile(() async {
       await Future.delayed(const Duration(seconds: 1));
       if (!mounted) return false;
@@ -193,6 +159,10 @@ class CameraPageState extends State<CameraPage>
       return true;
     });
 
+    await _setupCamera();
+  }
+
+  Future<void> _setupCamera() async {
     _cameras = await availableCameras();
 
     CameraDescription? backCamera;
@@ -214,12 +184,7 @@ class CameraPageState extends State<CameraPage>
         _maxExposureCompensation = await controller!.getMaxExposureOffset();
       }
     } on CameraException catch (e) {
-      switch (e.code) {
-        case 'CameraAccessDenied':
-          break;
-        default:
-          break;
-      }
+      Fimber.e('Error initializing camera: $e', ex: e);
       return;
     }
 
@@ -232,6 +197,24 @@ class CameraPageState extends State<CameraPage>
     if (_isPageVisible) {
       _startRecording();
     }
+  }
+
+  Future<void> _disposeCamera() async {
+    if (isRecording) {
+      try {
+        await controller?.stopImageStream();
+      } catch (e) {
+        Fimber.e('Error stopping image stream: $e', ex: e);
+      }
+      isRecording = false;
+      WakelockPlus.disable();
+    }
+    try {
+      await controller?.dispose();
+    } catch (e) {
+      Fimber.e('Error disposing camera: $e', ex: e);
+    }
+    controller = null;
   }
 
   Future<void> _setExposureCompensation(double value) async {
@@ -358,94 +341,115 @@ class CameraPageState extends State<CameraPage>
                         context,
                       ).deviceOrientation ??
                       DeviceOrientation.portraitUp;
-                  return CameraPreview(controller!);
+                  return SizedBox.expand(
+                    child: FittedBox(
+                      fit: BoxFit.cover,
+                      child: SizedBox(
+                        width: controller!.value.previewSize!.height,
+                        height: controller!.value.previewSize!.width,
+                        child: CameraPreview(controller!),
+                      ),
+                    ),
+                  );
                 },
               ),
-              Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(8),
+              Positioned(
+                top: 0,
+                left: 8,
+                right: 8,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Caching the last ${cacheManager.getCacheDurationSeconds().toStringAsFixed(1)} seconds',
+                        style: const TextStyle(color: Colors.white),
                       ),
-                      padding: const EdgeInsets.all(8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      const SizedBox(height: 4),
+                      Text(
+                        'Image Count: ${cacheManager.cacheSize.value} | FPS: $_fps | Cache: ${cacheManager.getCacheMemoryUsageMB().toStringAsFixed(1)}MB',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      Row(
                         children: [
+                          Icon(
+                            Icons.volume_up,
+                            color:
+                                _volumeButtonsEnabled
+                                    ? Colors.green
+                                    : Colors.orange,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 4),
                           Text(
-                            'Caching the last ${cacheManager.getCacheDurationSeconds().toStringAsFixed(1)} seconds',
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Image Count: ${cacheManager.cacheSize.value} | FPS: $_fps | Cache: ${cacheManager.getCacheMemoryUsageMB().toStringAsFixed(1)}MB',
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.volume_up,
-                                color:
-                                    _volumeButtonsEnabled
-                                        ? Colors.green
-                                        : Colors.orange,
-                                size: 16,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Volume shutter: ${_volumeButtonsEnabled ? "Active" : "Inactive"}',
-                                style: TextStyle(
-                                  color:
-                                      _volumeButtonsEnabled
-                                          ? Colors.green
-                                          : Colors.orange,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (!_isPageVisible || !isRecording)
-                            const Text(
-                              'Recording paused',
-                              style: TextStyle(color: Colors.orange),
+                            'Volume shutter: ${_volumeButtonsEnabled ? "Active" : "Inactive"}',
+                            style: TextStyle(
+                              color:
+                                  _volumeButtonsEnabled
+                                      ? Colors.green
+                                      : Colors.orange,
+                              fontSize: 12,
                             ),
+                          ),
                         ],
                       ),
-                    ),
-                  ),
-                  const Spacer(),
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 50),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        const Spacer(),
-                        GestureDetector(
-                          onTap: _onShutterPressed,
-                          child: Container(
-                            width: 80,
-                            height: 80,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.white,
-                              border: Border.all(color: Colors.grey, width: 3),
-                            ),
-                            child: Container(
-                              margin: const EdgeInsets.all(8),
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
+                      if (!_isPageVisible || !isRecording)
+                        const Text(
+                          'Recording paused',
+                          style: TextStyle(color: Colors.orange),
                         ),
-                        const Spacer(),
-                      ],
-                    ),
+                    ],
                   ),
-                ],
+                ),
+              ),
+              Watch((context) {
+                final offsetX = settingsManager.shutterOffsetXSignal.watch(context);
+                final isRepositioning = settingsManager.isRepositioningSignal.watch(context);
+                _syncWiggle(isRepositioning);
+                final currentOffset = _dragOffsetX ?? offsetX;
+                return _buildShutterButton(currentOffset, isRepositioning);
+              }),
+              Watch((context) {
+                final isRepositioning = settingsManager.isRepositioningSignal.watch(context);
+                if (!isRepositioning) return const SizedBox.shrink();
+                return _buildSaveBar();
+              }),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: GestureDetector(
+                  onTap: () => context.pushNamed(Pages.settings),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.5),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.settings, color: Colors.white, size: 22),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 56,
+                right: 8,
+                child: GestureDetector(
+                  onTap: () => context.pushNamed(Pages.map),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.5),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.bolt, color: Colors.white, size: 22),
+                  ),
+                ),
               ),
               Positioned(
                 bottom: 140,
@@ -461,6 +465,128 @@ class CameraPageState extends State<CameraPage>
     );
   }
 
+  static const _buttonSize = 80.0;
+  static const _buttonPadding = 40.0;
+  bool _wiggleActive = false;
+
+  void _syncWiggle(bool isRepositioning) {
+    if (isRepositioning && !_wiggleActive) {
+      _wiggleActive = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _wiggleController.repeat(reverse: true);
+      });
+    } else if (!isRepositioning && _wiggleActive) {
+      _wiggleActive = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _wiggleController.stop();
+          _wiggleController.reset();
+        }
+      });
+    }
+  }
+
+  Widget _buildShutterButton(double offsetX, bool isRepositioning) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final draggableWidth = screenWidth - _buttonSize - _buttonPadding * 2;
+    final left = _buttonPadding + draggableWidth * offsetX.clamp(0.0, 1.0);
+
+    Widget button = Container(
+      width: _buttonSize,
+      height: _buttonSize,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white,
+        border: Border.all(color: Colors.grey, width: 3),
+      ),
+      child: Container(
+        margin: const EdgeInsets.all(8),
+        decoration: const BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white,
+        ),
+      ),
+    );
+
+    if (isRepositioning) {
+      button = AnimatedBuilder(
+        animation: _wiggleController,
+        builder: (context, child) {
+          final angle = math.sin(_wiggleController.value * 2 * math.pi) * 0.087; // ±5°
+          return Transform.rotate(angle: angle, child: child);
+        },
+        child: button,
+      );
+
+      button = GestureDetector(
+        onHorizontalDragUpdate: (details) {
+          if (draggableWidth <= 0) return;
+          final currentOffset = _dragOffsetX ?? settingsManager.shutterOffsetX;
+          final delta = details.delta.dx / draggableWidth;
+          setState(() {
+            _dragOffsetX = (currentOffset + delta).clamp(0.0, 1.0);
+          });
+        },
+        onHorizontalDragEnd: (details) {
+          if (_dragOffsetX != null) {
+            settingsManager.setShutterOffsetX(_dragOffsetX!);
+            _dragOffsetX = null;
+          }
+        },
+        child: button,
+      );
+    } else {
+      button = GestureDetector(
+        onTap: _onShutterPressed,
+        child: button,
+      );
+    }
+
+    return Positioned(
+      bottom: 50,
+      left: left,
+      child: button,
+    );
+  }
+
+  Widget _buildSaveBar() {
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        color: Colors.black.withOpacity(0.7),
+        child: SafeArea(
+          bottom: false,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text(
+                'Drag the shutter button to reposition',
+                style: TextStyle(color: Colors.white, fontSize: 14),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton(
+                onPressed: () {
+                  settingsManager.exitRepositionMode();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                ),
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _onShutterPressed() {
     final cacheManager = imageCacheManager;
     if (cacheManager.cacheSize.value > 0) {
@@ -471,7 +597,7 @@ class CameraPageState extends State<CameraPage>
   void _openGallery() {
     final cacheManager = imageCacheManager;
     if (cacheManager.cacheSize.value == 0) return;
-    context.goNamed(Pages.gallery);
+    context.pushNamed(Pages.gallery);
   }
 
   void _startRecording() async {
@@ -494,6 +620,7 @@ class CameraPageState extends State<CameraPage>
       setState(() {
         isRecording = true;
       });
+      WakelockPlus.enable();
     } catch (e) {
       Fimber.e('Error starting recording: $e', ex: e);
     }
@@ -512,6 +639,7 @@ class CameraPageState extends State<CameraPage>
       setState(() {
         isRecording = false;
       });
+      WakelockPlus.disable();
     } catch (e) {
       Fimber.e('Error stopping recording: $e', ex: e);
     }
