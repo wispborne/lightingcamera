@@ -178,6 +178,73 @@ thunderButton.addEventListener('click', () => {
 applyThunderState();
 
 // ---------------------------------------------------------------------------
+// Tick sound: a short Geiger-style click for every live strike that lands inside
+// the current view. Synthesized with WebAudio so there's no asset to load.
+
+const soundButton = document.getElementById('sound-toggle');
+let soundEnabled = localStorage.getItem('tickSound') === '1';
+let audioCtx = null;
+let lastTickAt = 0;
+
+// Browsers keep an AudioContext suspended until a user gesture. The toggle click
+// is a gesture; for a page that loads with sound already enabled, the first
+// click/tap anywhere unlocks it.
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new AudioContext();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+document.addEventListener('pointerdown', () => {
+  if (soundEnabled) ensureAudio();
+}, { once: true });
+
+function tick() {
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.value = 1800;
+  gain.gain.setValueAtTime(0.12, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t);
+  osc.stop(t + 0.04);
+}
+
+function strikeOnScreen(strike) {
+  const { x: width, y: height } = map.getSize();
+  const point = map.latLngToContainerPoint([strike.lat, strike.lon]);
+  if (point.y < 0 || point.y > height) return false;
+  // Check every horizontal world copy, same wrap handling as redraw().
+  const worldWidth = map.getPixelWorldBounds().getSize().x;
+  const xNorm = ((point.x % worldWidth) + worldWidth) % worldWidth;
+  return xNorm <= width || xNorm >= worldWidth - 5;
+}
+
+function maybeTick(strike) {
+  if (!soundEnabled || !audioCtx || audioCtx.state !== 'running') return;
+  // A worldwide storm peak is tens of strikes per second; saturate like a Geiger
+  // counter instead of stacking clicks into noise.
+  const now = performance.now();
+  if (now - lastTickAt < 25) return;
+  if (!strikeOnScreen(strike)) return;
+  lastTickAt = now;
+  tick();
+}
+
+function applySoundState() {
+  soundButton.classList.toggle('active', soundEnabled);
+}
+
+soundButton.addEventListener('click', () => {
+  soundEnabled = !soundEnabled;
+  localStorage.setItem('tickSound', soundEnabled ? '1' : '0');
+  if (soundEnabled) ensureAudio();
+  applySoundState();
+});
+applySoundState();
+
+// ---------------------------------------------------------------------------
 // Status pill
 
 const statusDot = document.getElementById('status-dot');
@@ -220,6 +287,7 @@ function connect() {
       redraw();
     } else if (msg.type === 'strike') {
       strikes.push({ lat: msg.lat, lon: msg.lon, time: msg.time });
+      maybeTick(msg);
     }
     // 'ping' and unknown types: keepalive only, nothing to do.
   };

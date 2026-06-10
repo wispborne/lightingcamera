@@ -55,15 +55,23 @@ html, body {
 
 .dot.connected { background: var(--ok); }
 
-#thunder-toggle {
+#controls {
+  position: absolute;
+  z-index: 1000;
   top: 16px;
   right: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+#controls .pill {
+  position: static;
   min-height: 48px;
   cursor: pointer;
   color: var(--muted);
 }
 
-#thunder-toggle.active {
+#controls .pill.active {
   color: var(--accent);
 }
 

@@ -23,7 +23,7 @@ class Strike {
 final lightningService = LightningService();
 
 class LightningService {
-  static const String defaultRelayUrl = 'wss://lightning.wispborne.com';
+  static const String defaultRelayUrl = 'wss://lightning-relay.wispborne.com';
 
   /// Relay close codes the app reacts to. 4001 (bad key) and 4003 (banned) are
   /// terminal — reconnecting would only get the IP banned or stay rejected. The
