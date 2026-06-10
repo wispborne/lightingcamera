@@ -32,6 +32,9 @@ class Pages {
 }
 
 final _router = GoRouter(
+  // Without this the navigator never notifies the observer, so CameraPage's
+  // didPushNext/didPopNext (camera release/reconnect) would never fire.
+  observers: [CameraPageState.routeObserver],
   routes: [
     GoRoute(
       name: Pages.home,

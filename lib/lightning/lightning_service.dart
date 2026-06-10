@@ -106,15 +106,58 @@ class LightningService {
   /// feed down. See [acquire] / [release].
   int _refCount = 0;
 
+  /// Whether the relay-settings watcher has been wired up yet. Set once, lazily,
+  /// on the first [acquire]. See [_ensureCredentialWatch].
+  bool _watchingCredentials = false;
+
   /// Open the connection for a holder. The first holder connects around
   /// [center]; later holders just share the existing connection (first center
   /// wins — both pages use the same device GPS, so they're effectively equal).
   void acquire(LatLng center, {double radiusKm = defaultRadiusKm}) {
+    _ensureCredentialWatch();
     lastCenter = center;
     if (_refCount == 0) {
       connect(center, radiusKm: radiusKm);
     }
     _refCount++;
+  }
+
+  /// Watch the relay key, URL, and test-mode setting so a change takes effect
+  /// immediately — even while a page is already holding the connection. Without
+  /// this, a key entered *after* a holder acquired (e.g. the camera overlay
+  /// acquired at launch with no key, so [connect] bailed out but [_refCount] is
+  /// already non-zero) would never take effect, leaving every page "Disconnected"
+  /// until the holders are fully released. Registered lazily on the first
+  /// [acquire], by which point [settingsManager] is initialized.
+  void _ensureCredentialWatch() {
+    if (_watchingCredentials) return;
+    _watchingCredentials = true;
+
+    var prevKey = settingsManager.relayKeySignal.value;
+    var prevUrl = settingsManager.customRelayUrlSignal.value;
+    var prevTestMode = settingsManager.lightningTestModeSignal.value;
+
+    effect(() {
+      // Reading these inside the effect subscribes us to their changes.
+      final key = settingsManager.relayKeySignal.value;
+      final url = settingsManager.customRelayUrlSignal.value;
+      final testMode = settingsManager.lightningTestModeSignal.value;
+
+      final changed =
+          key != prevKey || url != prevUrl || testMode != prevTestMode;
+      prevKey = key;
+      prevUrl = url;
+      prevTestMode = testMode;
+      if (!changed) return; // initial run, or an unrelated rebuild
+
+      // Only reconnect while something actually needs the feed; with no holders
+      // the next acquire() picks up the new settings on its own.
+      if (_refCount == 0) return;
+      final center = lastCenter ?? _center;
+      if (center == null) return;
+      Fimber.i('Relay settings changed — reconnecting the lightning feed.');
+      connect(center, radiusKm: _radiusKm);
+    });
   }
 
   /// Release a holder. The connection closes only once the last holder lets go.
@@ -272,6 +315,35 @@ class LightningService {
 
       // Keepalive — nothing to do beyond the stale-timer reset above.
       if (type == 'ping') return;
+
+      // History replay: the relay's recent strikes for our box, sent after each
+      // subscription. Replace the list — the backlog is authoritative for the
+      // current box, and replacing makes duplicates impossible. Old relays never
+      // send this; the map just stays empty until live strikes arrive.
+      if (type == 'backlog') {
+        final entries = map['strikes'];
+        if (entries is! List) return;
+        final strikes = <Strike>[];
+        for (final entry in entries) {
+          // Skip malformed entries individually so one bad strike can't blank
+          // the whole seed.
+          if (entry is! Map) continue;
+          final lat = entry['lat'];
+          final lon = entry['lon'];
+          final time = entry['time'];
+          if (lat is! num || lon is! num || time is! num) continue;
+          strikes.add(
+            Strike(
+              LatLng(lat.toDouble(), lon.toDouble()),
+              DateTime.fromMillisecondsSinceEpoch(time.toInt()),
+            ),
+          );
+        }
+        Fimber.i('Seeded ${strikes.length} strikes from the relay backlog.');
+        _strikes.value = strikes;
+        _prune();
+        return;
+      }
 
       // A strike. New relays tag it type:'strike'; older ones just send lat/lon.
       if (type == 'strike' || (map['lat'] != null && map['lon'] != null)) {

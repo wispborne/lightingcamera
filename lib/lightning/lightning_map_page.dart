@@ -30,6 +30,7 @@ class _LightningMapPageState extends State<LightningMapPage> {
   LatLng? _userLocation;
   String? _statusMessage;
   Timer? _ticker;
+  bool _locating = false;
 
   @override
   void initState() {
@@ -54,18 +55,21 @@ class _LightningMapPageState extends State<LightningMapPage> {
 
     // Otherwise ask for a fresh fix. By the time it arrives the map has rendered
     // at least once, so it's safe to recenter via the controller.
-    final center = await _resolveLocation();
+    final resolved = await _resolveLocation();
     if (!mounted) return;
+    final center = resolved ?? _fallbackCenter;
     setState(() => _userLocation = center);
     _mapController.move(center, _defaultZoom);
     lightningService.acquire(center);
   }
 
-  Future<LatLng> _resolveLocation() async {
+  /// Returns the user's position, or null if it couldn't be resolved (with
+  /// [_statusMessage] set to say why).
+  Future<LatLng?> _resolveLocation() async {
     try {
       if (!await Geolocator.isLocationServiceEnabled()) {
         _statusMessage = 'Location off — showing default area';
-        return _fallbackCenter;
+        return null;
       }
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
@@ -74,15 +78,32 @@ class _LightningMapPageState extends State<LightningMapPage> {
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
         _statusMessage = 'Location denied — showing default area';
-        return _fallbackCenter;
+        return null;
       }
       final pos = await Geolocator.getCurrentPosition();
+      _statusMessage = null;
       return LatLng(pos.latitude, pos.longitude);
     } catch (e) {
       Fimber.e('Location lookup failed: $e');
       _statusMessage = 'Could not get location';
-      return _fallbackCenter;
+      return null;
     }
+  }
+
+  /// Re-resolve the user's location, recenter the map on it, and shift the
+  /// lightning feed's subscription area to match. Keeps the current zoom.
+  Future<void> _recenterOnUser() async {
+    if (_locating) return;
+    setState(() => _locating = true);
+    final resolved = await _resolveLocation();
+    if (!mounted) return;
+    setState(() {
+      _locating = false;
+      if (resolved != null) _userLocation = resolved;
+    });
+    if (resolved == null) return;
+    _mapController.move(resolved, _mapController.camera.zoom);
+    lightningService.updateCenter(resolved);
   }
 
   @override
@@ -217,8 +238,8 @@ class _LightningMapPageState extends State<LightningMapPage> {
                 ? 'Hide thunder circles'
                 : 'Show thunder circles',
             icon: Icon(
-              showThunder ? Symbols.spatial_audio : Symbols.spatial_audio,
-              color: showThunder ? colors.primary : colors.onSurfaceVariant,
+              showThunder ? Symbols.lightning_stand : Symbols.lightning_stand,
+              color: showThunder ? colors.primary : colors.onSurfaceVariant.withAlpha(150),
             ),
             onPressed: () async {
               await settingsManager.setShowThunderCircles(!showThunder);
@@ -246,6 +267,24 @@ class _LightningMapPageState extends State<LightningMapPage> {
               if (showThunder) CircleLayer(circles: _buildThunderCircles()),
               MarkerLayer(markers: _buildMarkers()),
             ],
+          ),
+          Positioned(
+            bottom: bottomInset + 96,
+            right: 16,
+            child: FloatingActionButton(
+              tooltip: 'Center on my location',
+              onPressed: _recenterOnUser,
+              child: _locating
+                  ? SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: colors.onPrimaryContainer,
+                      ),
+                    )
+                  : const Icon(Icons.my_location),
+            ),
           ),
           Positioned(
             bottom: bottomInset + 16,

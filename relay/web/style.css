@@ -1,0 +1,99 @@
+:root {
+  --surface: #1c1d22;
+  --on-surface: #e3e3e8;
+  --muted: #9a9aa3;
+  --accent: #4fc3f7;
+  --ok: #5dd87a;
+  --warn: #ffb74d;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #0b0c0f;
+  font-family: system-ui, sans-serif;
+  overflow: hidden;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+  background: #0b0c0f;
+}
+
+.pill {
+  position: absolute;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--on-surface);
+  font-size: 14px;
+  line-height: 1;
+  border: none;
+  backdrop-filter: blur(4px);
+}
+
+#status {
+  top: 16px;
+  left: 16px;
+}
+
+#strike-count {
+  color: var(--muted);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.dot.connected { background: var(--ok); }
+
+#thunder-toggle {
+  top: 16px;
+  right: 16px;
+  min-height: 48px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+#thunder-toggle.active {
+  color: var(--accent);
+}
+
+#note {
+  position: absolute;
+  z-index: 1000;
+  bottom: 24px;
+  left: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.you-are-here {
+  background: none;
+  border: none;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+}
+
+/* Dim Leaflet's light-themed chrome to fit the dark map. */
+.leaflet-control-zoom a {
+  background: var(--surface);
+  color: var(--on-surface);
+  border-color: #333;
+}
+
+.leaflet-control-attribution {
+  background: rgba(11, 12, 15, 0.7);
+  color: var(--muted);
+}
+
+.leaflet-control-attribution a {
+  color: var(--muted);
+}

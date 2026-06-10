@@ -3,3 +3,5 @@ config.yaml
 config.yml
 config.json
 *.log
+strike-history.json
+strike-history.json.tmp

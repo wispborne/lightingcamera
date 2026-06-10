@@ -2,7 +2,8 @@
 // ({ "auth": "<key>" } as the first message), then sends a subscription
 // { lat, lon, radiusKm }. Every message the relay sends back is tagged with a
 // `type` so the protocol can grow without breaking older clients: { type:'ack' }
-// on auth, { type:'strike', lat, lon, time } for strikes, { type:'ping' } as a
+// on auth, { type:'backlog', strikes:[...] } replaying recent history after each
+// subscription, { type:'strike', lat, lon, time } for strikes, { type:'ping' } as a
 // keepalive. The server also pings each socket so half-open connections (common
 // on mobile) get reaped instead of lingering.
 // TLS can be terminated here (config.server.tls) or by a reverse proxy in front.
@@ -23,7 +24,7 @@ const CLOSE_SESSION_EXPIRED = 4002;
 const CLOSE_BANNED = 4003;
 const CLOSE_TOO_MANY = 4004;
 
-export function startServer(config, log, { onFirstSubscriber, onLastSubscriber } = {}) {
+export function startServer(config, log, subscribers, history) {
   const { host, port, tls } = config.server;
   const heartbeatMs = config.server.heartbeatMs ?? 30000;
   const maxRadius = config.limits.maxBoxRadiusKm;
@@ -37,7 +38,6 @@ export function startServer(config, log, { onFirstSubscriber, onLastSubscriber }
     : createHttp();
 
   const wss = new WebSocketServer({ server: http });
-  let subscriberCount = 0;
 
   wss.on('connection', (socket, req) => {
     const ip = trustedIp(req);
@@ -102,11 +102,12 @@ export function startServer(config, log, { onFirstSubscriber, onLastSubscriber }
         const wasSubscribed = socket.box !== null;
         const radius = clampRadiusKm(msg.radiusKm, maxRadius);
         socket.box = boxFromCenter(msg.lat, msg.lon, radius);
-        if (!wasSubscribed) {
-          subscriberCount++;
-          if (subscriberCount === 1) onFirstSubscriber?.();
-        }
-        log.debug(`"${socket.friendId}" subscribed center=${msg.lat},${msg.lon} r=${radius}km (${subscriberCount} active)`);
+        if (!wasSubscribed) subscribers.add();
+        // Replay recent history for the new box so the client's map starts
+        // populated. Sent on every subscription (including a re-subscribe after
+        // the user moves) — the client replaces its list with the replay.
+        socket.send(JSON.stringify({ type: 'backlog', strikes: history.query(socket.box) }));
+        log.debug(`"${socket.friendId}" subscribed center=${msg.lat},${msg.lon} r=${radius}km (${subscribers.count} active)`);
       }
     });
 
@@ -114,9 +115,8 @@ export function startServer(config, log, { onFirstSubscriber, onLastSubscriber }
       clearTimeout(socket.authTimer);
       clearTimeout(socket.sessionTimer);
       if (socket.box) {
-        subscriberCount--;
         socket.box = null;
-        if (subscriberCount === 0) onLastSubscriber?.();
+        subscribers.remove();
       }
     });
 

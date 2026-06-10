@@ -179,12 +179,15 @@ class CameraPageState extends State<CameraPage>
   void didPopNext() {
     _isPageVisible = true;
     _volumeButtonsEnabled = true;
-    if (controller != null && controller!.value.isInitialized) {
+    if (controller == null) {
+      // Camera was released when another page covered this one — reconnect.
+      _initializeControllerFuture = _setupCamera();
+      setState(() {});
+    } else if (controller!.value.isInitialized) {
       controller!.resumePreview();
-    }
-
-    if (!isRecording && controller != null && controller!.value.isInitialized) {
-      _startRecording();
+      if (!isRecording) {
+        _startRecording();
+      }
     }
     _syncOverlay();
     _syncMiniMap();
@@ -194,9 +197,9 @@ class CameraPageState extends State<CameraPage>
   void didPushNext() {
     _isPageVisible = false;
     _volumeButtonsEnabled = false;
-    if (isRecording) {
-      _stopRecording();
-    }
+    // Fully release the camera while another page covers this one — keeping
+    // the hardware connected just to pause the preview wastes battery.
+    _disposeCamera();
     _syncOverlay();
     _syncMiniMap();
   }
@@ -205,9 +208,7 @@ class CameraPageState extends State<CameraPage>
   void didPop() {
     _isPageVisible = false;
     _volumeButtonsEnabled = false;
-    if (isRecording) {
-      _stopRecording();
-    }
+    _disposeCamera();
     _syncOverlay();
     _syncMiniMap();
   }
@@ -256,7 +257,9 @@ class CameraPageState extends State<CameraPage>
           _maxExposureCompensation = await newController.getMaxExposureOffset();
         }
 
-        if (!mounted) {
+        if (!mounted || !_isPageVisible) {
+          // The page went away (or got covered) while the camera was
+          // connecting — release it instead of holding it in the background.
           await newController.dispose();
           return;
         }
@@ -838,25 +841,6 @@ class CameraPageState extends State<CameraPage>
       WakelockPlus.enable();
     } catch (e) {
       Fimber.e('Error starting recording: $e', ex: e);
-    }
-  }
-
-  void _stopRecording() async {
-    if (controller == null ||
-        !controller!.value.isInitialized ||
-        !isRecording) {
-      return;
-    }
-
-    try {
-      await controller!.pausePreview();
-      await controller!.stopImageStream();
-      setState(() {
-        isRecording = false;
-      });
-      WakelockPlus.disable();
-    } catch (e) {
-      Fimber.e('Error stopping recording: $e', ex: e);
     }
   }
 }

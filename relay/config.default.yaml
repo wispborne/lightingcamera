@@ -31,6 +31,30 @@ server:
     certPath: ""
     keyPath: ""
 
+# Browser-facing world map: a static page plus a websocket that streams ALL strikes
+# worldwide, with no relay-key auth. Authentication is the reverse proxy's job —
+# put Caddy + tinyauth (forward_auth) in front and keep host on localhost so the
+# port is unreachable any other way. Setting host to 0.0.0.0 would expose an
+# unauthenticated world feed; don't.
+web:
+  enabled: false
+  host: 127.0.0.1
+  port: 8788
+  # Ping cadence for web sockets, same semantics as server.heartbeatMs.
+  heartbeatMs: 30000
+
+# Rolling history of recent strikes, replayed to clients on connect so their maps
+# start populated: app clients get their bounding box after subscribing, web
+# viewers get the whole world. Covers the 5-minute display window.
+history:
+  # Cap on retained strikes so a worldwide peak can't grow memory unbounded.
+  maxStrikes: 20000
+  # Snapshot file so the history survives a relay restart. Relative paths resolve
+  # against the relay directory. Set to "" to keep the history in memory only.
+  snapshotPath: strike-history.json
+  # How often (ms) to rewrite the snapshot while strikes are arriving.
+  snapshotIntervalMs: 10000
+
 # Bounding-box limits applied to every subscription.
 limits:
   # Largest radius (km) a client may request; bigger requests are clamped to this.

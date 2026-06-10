@@ -15,16 +15,19 @@ decode/reconnect logic in one place.
 
 ```
 relay/
-├── index.js              # entry point: wires upstream -> server
+├── index.js              # entry point: wires upstream -> servers
 ├── spike.js              # standalone go/no-go test (prints decoded strikes)
 ├── config.default.yaml  # shipped, commented defaults (do not edit; overlay with config.yaml)
 ├── lightning-relay.service  # systemd unit for the VPS
-└── src/
-    ├── decode.js         # Blitzortung LZW decode + strike normalization
-    ├── config.js         # config loader (defaults <- config.yaml) + logger
-    ├── geo.js            # center+radius -> bounding box, in-box test
-    ├── upstream.js       # Blitzortung connection, reconnect/failover, heartbeat
-    └── server.js         # client-facing websocket server + box fan-out
+├── src/
+│   ├── decode.js         # Blitzortung LZW decode + strike normalization
+│   ├── config.js         # config loader (defaults <- config.yaml) + logger
+│   ├── geo.js            # center+radius -> bounding box, in-box test
+│   ├── upstream.js       # Blitzortung connection, reconnect/failover, heartbeat
+│   ├── subscribers.js    # shared gauge: app + web viewers wake the lazy upstream
+│   ├── server.js         # app-facing websocket server + box fan-out
+│   └── web.js            # browser-facing world map: static page + unfiltered /ws
+└── web/                  # the world map page (vanilla JS + vendored Leaflet)
 ```
 
 ## Run locally
@@ -136,3 +139,61 @@ The app needs `wss://`. Two options:
 
 Then set the app's relay URL (see `lib/lightning/lightning_service.dart`) to your
 `wss://your-host/...` endpoint.
+
+## World map page
+
+An optional browser map (like lightningmaps.org): a full-screen dark world map showing
+**every** strike worldwide, fading over the same 5-minute window as the app, with the
+visitor's GPS position and an optional thunder-wave circle per strike (343 m/s, capped
+at 15 miles — the app's constants). Served by the relay itself on a second port so the
+reverse proxy can gate it separately from the app websocket.
+
+Enable it in `config.yaml`:
+
+```yaml
+web:
+  enabled: true
+```
+
+Defaults (see `config.default.yaml`): binds `127.0.0.1:8788`, replays a backlog of the
+last 5 minutes of strikes to a newly opened page (capped at `backlogMaxStrikes`).
+
+### Protocol
+
+The page's websocket (`/ws`) needs **no key** — the relay sends without being asked:
+
+- `{ "type": "backlog", "strikes": [...] }` once on connect (last 5 minutes, worldwide)
+- `{ "type": "strike", "lat", "lon", "time" }` live
+- `{ "type": "ping" }` keepalives
+
+Viewers count as subscribers, so opening the page wakes the upstream Blitzortung
+connection just like an app client does.
+
+### Auth: Caddy + tinyauth
+
+Because the web port has no key auth, **never expose it directly** — keep
+`web.host` on `127.0.0.1` and put Caddy with [tinyauth](https://tinyauth.app/)
+`forward_auth` in front:
+
+```caddyfile
+map.example.com {
+    forward_auth localhost:3000 {       # tinyauth
+        uri /api/auth/caddy
+        copy_headers Remote-User
+    }
+    reverse_proxy 127.0.0.1:8788        # websocket upgrade is proxied automatically
+}
+```
+
+tinyauth runs and is configured separately (its docs cover users and OAuth). The
+app-facing relay domain stays as-is — app keys, no tinyauth. Note that browsers only
+allow geolocation on HTTPS pages, which Caddy's automatic TLS provides; on plain HTTP
+the page quietly falls back to the world view.
+
+### Frontend notes
+
+`web/` is plain HTML/JS/CSS with no build step. Leaflet is vendored under
+`web/vendor/leaflet/` (copied from the `leaflet` npm devDependency) so the page loads
+without a CDN; map tiles come from CARTO's dark basemap (free for non-commercial use).
+Strikes draw on a single canvas overlay, so tens of thousands of worldwide strikes
+render without breaking a sweat. The thunder toggle persists in `localStorage`.
