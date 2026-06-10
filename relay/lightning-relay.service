@@ -19,7 +19,7 @@ Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
 # Optional: point at a custom config location
-# Environment=RELAY_CONFIG=/etc/lightning-relay/config.json
+# Environment=RELAY_CONFIG=/etc/lightning-relay/config.yaml
 
 [Install]
 WantedBy=multi-user.target

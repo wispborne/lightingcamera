@@ -1,12 +1,171 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:signals/signals_flutter.dart';
+import 'package:lightingcamera/lightning/lightning_service.dart';
 import 'settings_manager.dart';
 
-class SettingsPage extends StatelessWidget {
+class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
   @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  late final TextEditingController _urlController;
+  late final TextEditingController _keyController;
+  final FocusNode _urlFocusNode = FocusNode();
+  bool _obscureKey = true;
+  bool _testing = false;
+  String? _testResultMessage;
+  bool _testSuccess = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _urlController = TextEditingController(
+      text: settingsManager.customRelayUrl,
+    );
+    _keyController = TextEditingController(
+      text: settingsManager.relayKey,
+    );
+  }
+
+  @override
+  void dispose() {
+    _saveUrl();
+    _saveKey();
+    _urlController.dispose();
+    _keyController.dispose();
+    _urlFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _saveUrl() {
+    settingsManager.setCustomRelayUrl(_urlController.text.trim());
+  }
+
+  void _saveKey() {
+    settingsManager.setRelayKey(_keyController.text.trim());
+  }
+
+  Future<void> _testConnection() async {
+    _saveUrl();
+    _saveKey();
+    setState(() {
+      _testing = true;
+      _testResultMessage = null;
+    });
+
+    final url = _urlController.text.trim().isEmpty
+        ? LightningService.defaultRelayUrl
+        : _urlController.text.trim();
+
+    final (success, message) = await LightningService.testConnection(
+      url,
+      _keyController.text.trim(),
+    );
+
+    // Remember a URL the user typed that authenticated, for the suggestions
+    // dropdown. Empty (the default relay) is ignored by the manager.
+    if (success) {
+      await settingsManager.recordSuccessfulRelayUrl(
+        _urlController.text.trim(),
+      );
+    }
+
+    if (mounted) {
+      setState(() {
+        _testing = false;
+        _testSuccess = success;
+        _testResultMessage = message;
+      });
+    }
+  }
+
+  /// The relay URL field, wrapped in a [RawAutocomplete] so that focusing it
+  /// drops down the URLs that have connected successfully before. With empty
+  /// text it offers all recent URLs; once the user types it narrows by match.
+  Widget _buildRelayUrlField(BuildContext context) {
+    return RawAutocomplete<String>(
+      textEditingController: _urlController,
+      focusNode: _urlFocusNode,
+      optionsBuilder: (textValue) {
+        final recents = settingsManager.recentRelayUrls;
+        final query = textValue.text.trim().toLowerCase();
+        if (query.isEmpty) return recents;
+        return recents.where((u) => u.toLowerCase().contains(query));
+      },
+      onSelected: (selection) {
+        _urlController.text = selection;
+        _saveUrl();
+        setState(() => _testResultMessage = null);
+      },
+      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            labelText: 'Custom relay URL',
+            hintText: LightningService.defaultRelayUrl,
+            border: const OutlineInputBorder(),
+            suffixIcon: IconButton(
+              icon: const Icon(Icons.clear),
+              onPressed: () {
+                _urlController.clear();
+                settingsManager.setCustomRelayUrl('');
+                setState(() => _testResultMessage = null);
+              },
+            ),
+          ),
+          keyboardType: TextInputType.url,
+          onSubmitted: (_) {
+            _saveUrl();
+            onFieldSubmitted();
+          },
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Material(
+              elevation: 4,
+              borderRadius: BorderRadius.circular(8),
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                width: MediaQuery.of(context).size.width - 32,
+                child: ListView.builder(
+                  padding: EdgeInsets.zero,
+                  shrinkWrap: true,
+                  itemCount: options.length,
+                  itemBuilder: (context, index) {
+                    final option = options.elementAt(index);
+                    return ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.history),
+                      title: Text(
+                        option,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => onSelected(option),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Settings'),
@@ -23,6 +182,165 @@ class SettingsPage extends StatelessWidget {
               context.pop();
             },
           ),
+          Watch(
+            (context) => SwitchListTile(
+              title: const Text('Lightning test mode'),
+              subtitle: const Text(
+                'Simulate strikes every 5 seconds instead of using the relay. '
+                'Reopen the map to apply.',
+              ),
+              value: settingsManager.lightningTestModeSignal.value,
+              onChanged: settingsManager.setLightningTestMode,
+            ),
+          ),
+          Watch(
+            (context) => SwitchListTile(
+              title: const Text('Strike overlay'),
+              subtitle: const Text(
+                'Show recent strikes over the camera, pinned to their real-world '
+                'direction. Uses location and the compass.',
+              ),
+              value: settingsManager.strikeOverlayEnabledSignal.value,
+              onChanged: settingsManager.setStrikeOverlayEnabled,
+            ),
+          ),
+          Watch(
+            (context) => SwitchListTile(
+              title: const Text('Strike info labels'),
+              subtitle: const Text(
+                'Show distance and thunder arrival time next to each strike '
+                'on the camera overlay.',
+              ),
+              value: settingsManager.showStrikeInfoSignal.value,
+              onChanged: settingsManager.strikeOverlayEnabledSignal.value
+                  ? settingsManager.setShowStrikeInfo
+                  : null,
+            ),
+          ),
+          Watch(
+            (context) => SwitchListTile(
+              title: const Text('Mini map'),
+              subtitle: const Text(
+                'Show a small live lightning map in the top-left of the camera. '
+                'Uses location.',
+              ),
+              value: settingsManager.miniMapEnabledSignal.value,
+              onChanged: settingsManager.setMiniMapEnabled,
+            ),
+          ),
+          Watch((context) {
+            final enabled = settingsManager.miniMapEnabledSignal.value;
+            final opacity = settingsManager.miniMapOpacitySignal.value;
+            return ListTile(
+              enabled: enabled,
+              title: const Text('Mini map opacity'),
+              subtitle: Slider(
+                value: opacity,
+                min: 0.2,
+                max: 1.0,
+                divisions: 8,
+                label: '${(opacity * 100).round()}%',
+                onChanged: enabled ? settingsManager.setMiniMapOpacity : null,
+              ),
+              trailing: Text('${(opacity * 100).round()}%'),
+            );
+          }),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              'Lightning relay',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: colorScheme.primary,
+                  ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: _buildRelayUrlField(context),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Text(
+              'Leave empty to use the default relay.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: TextField(
+              controller: _keyController,
+              obscureText: _obscureKey,
+              decoration: InputDecoration(
+                labelText: 'Relay key',
+                hintText: 'Key from whoever runs the relay',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscureKey ? Icons.visibility : Icons.visibility_off,
+                  ),
+                  tooltip: _obscureKey ? 'Show key' : 'Hide key',
+                  onPressed: () => setState(() => _obscureKey = !_obscureKey),
+                ),
+              ),
+              onSubmitted: (_) => _saveKey(),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Text(
+              'Required to connect. Ask whoever runs the relay for your key.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Row(
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: _testing ? null : _testConnection,
+                  icon: _testing
+                      ? SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: colorScheme.onSecondaryContainer,
+                          ),
+                        )
+                      : const Icon(Icons.sync),
+                  label: const Text('Test connection'),
+                ),
+                if (_testResultMessage != null) ...[
+                  const SizedBox(width: 16),
+                  Icon(
+                    _testSuccess ? Icons.check_circle : Icons.error,
+                    size: 20,
+                    color: _testSuccess
+                        ? colorScheme.primary
+                        : colorScheme.error,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (_testResultMessage != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Text(
+                _testResultMessage!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: _testSuccess
+                          ? colorScheme.primary
+                          : colorScheme.error,
+                    ),
+              ),
+            ),
+          const SizedBox(height: 16),
         ],
       ),
     );

@@ -7,9 +7,13 @@ import 'package:lightingcamera/lightning/lightning_map_page.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
 import 'package:lightingcamera/settings/settings_page.dart';
 import 'package:lightingcamera/utils/logging.dart';
+import 'package:signals/signals.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Signals attaches a DevTools observer in debug mode that logs every signal
+  // update to the console (very noisy with the image cache). Turn it off.
+  SignalsObserver.instance = null;
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,

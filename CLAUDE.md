@@ -50,6 +50,24 @@ CameraImage (YUV420)
 - CMake: `android/app/src/main/cpp/CMakeLists.txt` — compiles as shared lib with `-O3 -ffast-math` and NEON on ARM.
 - NDK ABI filters: `arm64-v8a`, `armeabi-v7a`, `x86_64`.
 
+## UI Guidelines
+
+Follow minimal Material Design 3 best practices:
+
+- **8dp grid:** All spacing, padding, and margin values must be multiples of 8 (8, 16, 24, 32, …). Use 4dp only for tight internal spacing (e.g. icon-to-label gap within a single component).
+- **Touch targets:** Minimum 48×48dp for all interactive elements.
+- **Typography:** Use Material `TextTheme` styles — never hard-code font sizes.
+- **Color:** Pull colors from `Theme.of(context).colorScheme` — never hard-code color values.
+- **Elevation & surfaces:** Prefer Material surface tints over drop shadows. Keep the layer count low — one overlay level at most.
+- **Iconography:** Use `Icons.*` from Material. Keep icons simple and monochrome, matching `colorScheme.onSurface`.
+- **Layout:** Favor `Padding`, `SizedBox`, and `Gap` for whitespace over `Container` with decoration. Avoid deeply nested widgets when a single `Column`/`Row` with spacing suffices.
+- **Minimalism:** No decorative borders, dividers, or background fills unless they serve a clear functional purpose (grouping, separation of unrelated content). When in doubt, leave it out.
+- **Safe areas:** Never position content under the status bar or navigation bar. Use `MediaQuery.of(context).padding` to get system insets and offset accordingly (top for status bar, bottom for nav bar). This applies to all `Positioned` widgets in full-screen `Stack` layouts, overlays, and `extendBodyBehindAppBar` screens.
+
 ## AI Assistant Instructions
 
 - Avoid using jargon in your responses.
+
+## Other
+
+- 'Watch' is deprecated and shouldn't be used. Use SignalBuilder instead for superior reactivity and consistent naming.
