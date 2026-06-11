@@ -71,3 +71,4 @@ Follow minimal Material Design 3 best practices:
 ## Other
 
 - 'Watch' is deprecated and shouldn't be used. Use SignalBuilder instead for superior reactivity and consistent naming.
+- Use `fvm flutter` instead of the `flutter` command directly.

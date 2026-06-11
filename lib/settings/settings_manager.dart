@@ -12,6 +12,7 @@ class SettingsManager {
   static const _showStrikeInfoKey = 'show_strike_info';
   static const _miniMapEnabledKey = 'mini_map_enabled';
   static const _miniMapOpacityKey = 'mini_map_opacity';
+  static const _rainRadarEnabledKey = 'rain_radar_enabled';
   static const _customRelayUrlKey = 'custom_relay_url';
   static const _relayKeyKey = 'relay_key';
   static const _recentRelayUrlsKey = 'recent_relay_urls';
@@ -20,6 +21,7 @@ class SettingsManager {
   static const _maxRecentRelayUrls = 5;
   static const _cacheInfoCollapsedKey = 'cache_info_collapsed';
   static const _calibrationSuppressedUntilKey = 'calibration_suppressed_until';
+  static const _skipGalleryExitWarningKey = 'skip_gallery_exit_warning';
 
   late final Signal<double> _shutterOffsetX;
   ReadonlySignal<double> get shutterOffsetXSignal => _shutterOffsetX;
@@ -65,6 +67,13 @@ class SettingsManager {
   ReadonlySignal<double> get miniMapOpacitySignal => _miniMapOpacity;
   double get miniMapOpacity => _miniMapOpacity.value;
 
+  /// When on, both the lightning map and the camera mini map overlay the latest
+  /// precipitation radar frame (from RainViewer's free public API). On by
+  /// default — it's a read-only tile fetch with no permissions or relay key.
+  late final Signal<bool> _rainRadarEnabled;
+  ReadonlySignal<bool> get rainRadarEnabledSignal => _rainRadarEnabled;
+  bool get rainRadarEnabled => _rainRadarEnabled.value;
+
   /// Custom relay URL. When non-empty, the lightning service connects here
   /// instead of the default relay.
   late final Signal<String> _customRelayUrl;
@@ -102,6 +111,14 @@ class SettingsManager {
   ReadonlySignal<DateTime?> get calibrationSuppressedUntilSignal =>
       _calibrationSuppressedUntil;
 
+  /// When on, leaving the gallery skips the "unsaved images will be lost"
+  /// confirmation and returns to the camera straight away. Off by default; the
+  /// user opts in via the dialog's "Never show this again" checkbox.
+  late final Signal<bool> _skipGalleryExitWarning;
+  ReadonlySignal<bool> get skipGalleryExitWarningSignal =>
+      _skipGalleryExitWarning;
+  bool get skipGalleryExitWarning => _skipGalleryExitWarning.value;
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getDouble(_shutterOffsetXKey) ?? 0.0;
@@ -115,6 +132,7 @@ class SettingsManager {
     _showStrikeInfo = signal(prefs.getBool(_showStrikeInfoKey) ?? true);
     _miniMapEnabled = signal(prefs.getBool(_miniMapEnabledKey) ?? false);
     _miniMapOpacity = signal(prefs.getDouble(_miniMapOpacityKey) ?? 0.8);
+    _rainRadarEnabled = signal(prefs.getBool(_rainRadarEnabledKey) ?? true);
     _customRelayUrl = signal(prefs.getString(_customRelayUrlKey) ?? '');
     _relayKey = signal(prefs.getString(_relayKeyKey) ?? '');
     _recentRelayUrls = signal(
@@ -128,6 +146,9 @@ class SettingsManager {
       suppressedMs == null
           ? null
           : DateTime.fromMillisecondsSinceEpoch(suppressedMs),
+    );
+    _skipGalleryExitWarning = signal(
+      prefs.getBool(_skipGalleryExitWarningKey) ?? false,
     );
   }
 
@@ -171,6 +192,12 @@ class SettingsManager {
     _miniMapOpacity.value = opacity.clamp(0.2, 1.0);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_miniMapOpacityKey, _miniMapOpacity.value);
+  }
+
+  Future<void> setRainRadarEnabled(bool enabled) async {
+    _rainRadarEnabled.value = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_rainRadarEnabledKey, enabled);
   }
 
   Future<void> setCustomRelayUrl(String url) async {
@@ -219,6 +246,12 @@ class SettingsManager {
       _calibrationSuppressedUntilKey,
       until.millisecondsSinceEpoch,
     );
+  }
+
+  Future<void> setSkipGalleryExitWarning(bool skip) async {
+    _skipGalleryExitWarning.value = skip;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_skipGalleryExitWarningKey, skip);
   }
 
   void enterRepositionMode() {

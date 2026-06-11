@@ -8,7 +8,7 @@ import 'package:gal/gal.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img_lib;
 import 'package:lightingcamera/camera/image_converter.dart';
-import 'package:lightingcamera/main.dart';
+import 'package:lightingcamera/settings/settings_manager.dart';
 import 'package:lightingcamera/utils/logging.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -29,6 +29,16 @@ class _GalleryPageState extends State<GalleryPage> {
   final _gridController = DragSelectGridViewController();
   int _generation = 0;
 
+  static const int _minCrossAxisCount = 2;
+  static const int _maxCrossAxisCount = 8;
+  static const int _portraitDefault = 3;
+  static const int _landscapeDefault = 6;
+  int? _userCrossAxisCount;
+  final Map<int, Offset> _pointers = {};
+  double? _initialPinchDistance;
+
+  bool _isSavingAll = false;
+
   bool get _isSelecting => _gridController.value.isSelecting;
   Set<int> get _selectedIndexes => _gridController.value.selectedIndexes;
 
@@ -44,6 +54,11 @@ class _GalleryPageState extends State<GalleryPage> {
   }
 
   void _onSelectionChanged() => setState(() {});
+
+  double _currentPinchDistance() {
+    final points = _pointers.values.toList();
+    return (points[0] - points[1]).distance;
+  }
 
   Future<void> _convertImageBatch(int start, int count) async {
     final end = (start + count).clamp(0, images.length);
@@ -101,7 +116,7 @@ class _GalleryPageState extends State<GalleryPage> {
           if (_isSelecting) {
             _exitSelectionMode();
           } else {
-            _showExitDialog();
+            _handleExit();
           }
         }
       },
@@ -114,7 +129,7 @@ class _GalleryPageState extends State<GalleryPage> {
           ),
           leading: IconButton(
             icon: Icon(_isSelecting ? Icons.close : Icons.arrow_back),
-            onPressed: _isSelecting ? _exitSelectionMode : _showExitDialog,
+            onPressed: _isSelecting ? _exitSelectionMode : _handleExit,
           ),
           actions: _isSelecting
               ? [
@@ -133,7 +148,24 @@ class _GalleryPageState extends State<GalleryPage> {
                         : null,
                   ),
                 ]
-              : null,
+              : [
+                  IconButton(
+                    icon: _isSavingAll
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.save_alt),
+                    tooltip: 'Save all',
+                    onPressed: (images.isNotEmpty && !_isSavingAll)
+                        ? _saveAll
+                        : null,
+                  ),
+                ],
           backgroundColor: _isSelecting
               ? Colors.deepPurple.shade900
               : Colors.black87,
@@ -147,19 +179,67 @@ class _GalleryPageState extends State<GalleryPage> {
                   style: TextStyle(color: Colors.white),
                 ),
               )
-            : DragSelectGridView(
-                gridController: _gridController,
-                padding: const EdgeInsets.all(2),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 2,
-                  crossAxisSpacing: 2,
-                  childAspectRatio: 1,
-                ),
-                itemCount: images.length,
-                triggerSelectionOnTap: false,
-                impliesAppBarDismissal: false,
-                itemBuilder: (context, index, selected) {
+            : OrientationBuilder(
+                builder: (context, orientation) {
+                  final crossAxisCount = (_userCrossAxisCount ??
+                      (orientation == Orientation.landscape
+                          ? _landscapeDefault
+                          : _portraitDefault))
+                      .clamp(_minCrossAxisCount, _maxCrossAxisCount);
+
+                  return Listener(
+                    onPointerDown: (e) {
+                      _pointers[e.pointer] = e.localPosition;
+                      if (_pointers.length == 2) {
+                        _initialPinchDistance = _currentPinchDistance();
+                      }
+                    },
+                    onPointerMove: (e) {
+                      _pointers[e.pointer] = e.localPosition;
+                      if (_pointers.length == 2 &&
+                          _initialPinchDistance != null) {
+                        final dist = _currentPinchDistance();
+                        final ratio = dist / _initialPinchDistance!;
+                        if (ratio > 1.5 &&
+                            crossAxisCount > _minCrossAxisCount) {
+                          setState(() {
+                            _userCrossAxisCount = crossAxisCount - 1;
+                          });
+                          _initialPinchDistance = dist;
+                        } else if (ratio < 0.65 &&
+                            crossAxisCount < _maxCrossAxisCount) {
+                          setState(() {
+                            _userCrossAxisCount = crossAxisCount + 1;
+                          });
+                          _initialPinchDistance = dist;
+                        }
+                      }
+                    },
+                    onPointerUp: (e) {
+                      _pointers.remove(e.pointer);
+                      if (_pointers.length < 2) {
+                        _initialPinchDistance = null;
+                      }
+                    },
+                    onPointerCancel: (e) {
+                      _pointers.remove(e.pointer);
+                      if (_pointers.length < 2) {
+                        _initialPinchDistance = null;
+                      }
+                    },
+                    child: DragSelectGridView(
+                      gridController: _gridController,
+                      padding: const EdgeInsets.all(2),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        mainAxisSpacing: 2,
+                        crossAxisSpacing: 2,
+                        childAspectRatio: 1,
+                      ),
+                      itemCount: images.length,
+                      triggerSelectionOnTap: false,
+                      impliesAppBarDismissal: false,
+                      itemBuilder: (context, index, selected) {
                   if (index >=
                       _displayImages.length + _currentlyConverting.length) {
                     _convertImageBatch(index, _batchSize);
@@ -249,6 +329,9 @@ class _GalleryPageState extends State<GalleryPage> {
                             ),
                         ],
                       ),
+                    ),
+                  );
+                      },
                     ),
                   );
                 },
@@ -358,29 +441,177 @@ class _GalleryPageState extends State<GalleryPage> {
     }
   }
 
-  void _showExitDialog() {
+  Future<void> _saveAll() async {
+    PermissionStatus permission = await Permission.photos.status;
+    if (!permission.isGranted) {
+      permission = await Permission.photos.request();
+    }
+
+    if (!(permission.isGranted || permission.isLimited)) {
+      if (!mounted) return;
+      if (permission.isPermanentlyDenied) {
+        _showPermissionDialog(context);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Storage permission is required to save images'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isSavingAll = true);
+
+    int saved = 0;
+    int failed = 0;
+
+    // Snapshot the list so the indices stay valid even if a conversion frees a
+    // slot in the middle of saving.
+    final toSave = List<ImageWithMetadata>.from(images);
+
+    for (int i = 0; i < toSave.length; i++) {
+      try {
+        // Reuse an already-converted frame when we have one, otherwise convert.
+        final image =
+            _displayImages[i] ?? await _convertCameraImageToUIImage(toSave[i]);
+        if (image == null) {
+          failed++;
+          continue;
+        }
+
+        final bytes = Uint8List.fromList(
+          img_lib.encodeJpg(image.image, quality: 95),
+        );
+        await Gal.putImageBytes(
+          bytes,
+          name:
+              'camera_image_${DateTime.now().millisecondsSinceEpoch}_$i.jpg',
+        );
+        saved++;
+      } catch (e) {
+        Fimber.e('Error saving image during Save All: $e', ex: e);
+        failed++;
+      }
+    }
+
+    if (!mounted) return;
+    setState(() => _isSavingAll = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          failed == 0
+              ? 'Saved $saved image${saved == 1 ? '' : 's'} to gallery'
+              : 'Saved $saved, failed to save $failed',
+        ),
+        backgroundColor: failed == 0 ? Colors.green : Colors.orange,
+      ),
+    );
+  }
+
+  void _showPermissionDialog(BuildContext context) {
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text('Warning'),
+          title: const Text('Storage Permission Required'),
           content: const Text(
-            'Unsaved images will be lost. Are you sure you want to return to camera?',
+            'This app needs storage permission to save images to your gallery. Please enable it in the app settings.',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Stay'),
+              child: const Text('Cancel'),
             ),
             TextButton(
               onPressed: () {
-                final cacheManager = imageCacheManager;
-                cacheManager.clearCache();
-                context.goNamed(Pages.home);
+                Navigator.of(context).pop();
+                openAppSettings();
               },
-              child: const Text('Return to camera'),
+              child: const Text('Open Settings'),
             ),
           ],
+        );
+      },
+    );
+  }
+
+  void _handleExit() {
+    // The user opted out of the confirmation earlier — leave straight away.
+    if (settingsManager.skipGalleryExitWarning) {
+      _returnToCamera();
+      return;
+    }
+    _showExitDialog();
+  }
+
+  /// Close the dialog (if any) first, then pop the gallery so the camera page
+  /// gets a single, clean didPopNext. Navigating home via goNamed() while a
+  /// dialog was still on the stack made go_router rebuild its page list and fire
+  /// a spurious "covered" event that tore the camera back down right after it
+  /// reopened.
+  void _returnToCamera() {
+    imageCacheManager.clearCache();
+    if (mounted) context.pop();
+  }
+
+  void _showExitDialog() {
+    bool neverShowAgain = false;
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Warning'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Unsaved images will be lost. Are you sure you want to return to camera?',
+                  ),
+                  const SizedBox(height: 16),
+                  InkWell(
+                    onTap: () => setDialogState(
+                      () => neverShowAgain = !neverShowAgain,
+                    ),
+                    child: Row(
+                      children: [
+                        Checkbox(
+                          value: neverShowAgain,
+                          onChanged: (value) => setDialogState(
+                            () => neverShowAgain = value ?? false,
+                          ),
+                        ),
+                        const Expanded(
+                          child: Text('Never show this again'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Stay'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(dialogContext).pop();
+                    if (neverShowAgain) {
+                      settingsManager.setSkipGalleryExitWarning(true);
+                    }
+                    _returnToCamera();
+                  },
+                  child: const Text('Return to camera'),
+                ),
+              ],
+            );
+          },
         );
       },
     );

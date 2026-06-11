@@ -75,6 +75,24 @@ html, body {
   color: var(--accent);
 }
 
+#radar-opacity {
+  top: 72px;
+  right: 16px;
+  gap: 12px;
+  color: var(--muted);
+}
+
+#radar-opacity[hidden] {
+  display: none;
+}
+
+#radar-opacity-slider {
+  width: 120px;
+  height: 4px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 #note {
   position: absolute;
   z-index: 1000;

@@ -5,6 +5,7 @@ import 'package:signals/signals_flutter.dart';
 
 import 'package:lightingcamera/lightning/lightning_service.dart';
 import 'package:lightingcamera/lightning/mini_map_controller.dart';
+import 'package:lightingcamera/lightning/rain_radar_service.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
 
 /// A small, non-interactive lightning map shown in the top-left of the camera
@@ -29,7 +30,14 @@ class _MiniMapState extends State<MiniMap> {
   final MapController _mapController = MapController();
 
   @override
+  void initState() {
+    super.initState();
+    rainRadarService.acquire();
+  }
+
+  @override
   void dispose() {
+    rainRadarService.release();
     _mapController.dispose();
     super.dispose();
   }
@@ -116,6 +124,22 @@ class _MiniMapState extends State<MiniMap> {
                 TileLayer(
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                   userAgentPackageName: 'com.wisp.lightingcamera',
+                ),
+                // Same radar layer as the full map, under the strike markers.
+                // The thumbnail's own opacity (below) applies on top of this.
+                SignalBuilder(
+                  builder: (context) {
+                    final template = rainRadarService.tileUrlTemplate.value;
+                    if (template == null) return const SizedBox.shrink();
+                    return Opacity(
+                      opacity: 0.7,
+                      child: TileLayer(
+                        urlTemplate: template,
+                        userAgentPackageName: 'com.wisp.lightingcamera',
+                        maxNativeZoom: RainRadarService.maxNativeZoom,
+                      ),
+                    );
+                  },
                 ),
                 Watch(
                   (context) =>

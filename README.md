@@ -73,6 +73,49 @@ To use the lightning features against your own relay, run the one in
 [relay/](relay/README.md) and set its `wss://` URL under Settings → custom
 relay URL. Or flip on **test mode** in settings to simulate a storm locally.
 
+## Building a release APK
+
+Release builds are split by CPU architecture, so each APK only carries the
+native code for one type of phone (smaller downloads). Pick the architecture
+with `--target-platform`:
+
+```bash
+# 64-bit phones (everything from the last several years)
+fvm flutter build apk --release --split-per-abi --target-platform android-arm64
+
+# add 32-bit phones too, if you want to support older devices
+fvm flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64
+```
+
+`android-arm64` → `arm64-v8a`, `android-arm` → `armeabi-v7a`,
+`android-x64` → `x86_64` (emulators only). The finished files land in:
+
+```
+build/app/outputs/flutter-apk/app-<architecture>-release.apk
+```
+
+Release builds are signed with the debug key (see
+[android/app/build.gradle.kts](android/app/build.gradle.kts)), so they're fine
+for personal use but not for the Play Store.
+
+To install on a connected device and launch it, from the project root:
+
+```powershell
+$adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
+& $adb install -r build\app\outputs\flutter-apk\app-arm64-v8a-release.apk
+& $adb shell am start -n com.wisp.lightingcamera/.MainActivity
+```
+
+(Run these from `F:\Code\lightingcamera`, not a subfolder — the APK path is
+relative to the project root.)
+
+For the Play Store, build an app bundle instead — Google delivers the right
+architecture to each device automatically:
+
+```bash
+fvm flutter build appbundle --release
+```
+
 ## Tests
 
 ```bash

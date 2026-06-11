@@ -32,6 +32,17 @@ class CameraPageState extends State<CameraPage>
   bool isRecording = false;
   bool _isPageVisible = true;
 
+  // Opening and closing the camera both touch the same hardware and mutate
+  // `controller`, so they must never overlap. Every setup/teardown is chained
+  // onto this future so they run strictly one-at-a-time. Without this, rapid
+  // lifecycle events (e.g. notifications during a storm) could start a new
+  // open() before the previous close() released the camera, leaving it stuck
+  // "in use" until the whole app was restarted.
+  Future<void> _cameraOps = Future.value();
+  // True when every initialize() attempt failed; the UI shows a retry button
+  // instead of an endless spinner.
+  bool _cameraInitFailed = false;
+
   img_lib.Image? displayImage;
   int _imagesCapturedLastSecond = 0;
   int _fps = 0;
@@ -144,7 +155,7 @@ class CameraPageState extends State<CameraPage>
     _overlayController.stop();
     _miniMapEffectDispose?.call();
     _miniMapController.stop();
-    _disposeCamera();
+    _runCameraOp(_disposeCamera);
     super.dispose();
   }
 
@@ -153,10 +164,10 @@ class CameraPageState extends State<CameraPage>
     if (state == AppLifecycleState.inactive) {
       _overlayController.stop();
       _miniMapController.stop();
-      _disposeCamera();
+      _runCameraOp(_disposeCamera);
     } else if (state == AppLifecycleState.resumed) {
       if (_isPageVisible) {
-        _initializeControllerFuture = _setupCamera();
+        _initializeControllerFuture = _runCameraOp(_setupCamera);
         _syncOverlay();
         _syncMiniMap();
       }
@@ -181,7 +192,7 @@ class CameraPageState extends State<CameraPage>
     _volumeButtonsEnabled = true;
     if (controller == null) {
       // Camera was released when another page covered this one — reconnect.
-      _initializeControllerFuture = _setupCamera();
+      _initializeControllerFuture = _runCameraOp(_setupCamera);
       setState(() {});
     } else if (controller!.value.isInitialized) {
       controller!.resumePreview();
@@ -195,11 +206,19 @@ class CameraPageState extends State<CameraPage>
 
   @override
   void didPushNext() {
+    // Routing can fire this spuriously while the navigator reconciles its stack
+    // (e.g. returning from the gallery). If we're actually still the topmost
+    // route, nothing covered us — ignore it, otherwise we'd dispose the camera
+    // right after reopening it and hang on a spinner.
+    final route = ModalRoute.of(context);
+    if (route != null && route.isCurrent) {
+      return;
+    }
     _isPageVisible = false;
     _volumeButtonsEnabled = false;
     // Fully release the camera while another page covers this one — keeping
     // the hardware connected just to pause the preview wastes battery.
-    _disposeCamera();
+    _runCameraOp(_disposeCamera);
     _syncOverlay();
     _syncMiniMap();
   }
@@ -208,9 +227,17 @@ class CameraPageState extends State<CameraPage>
   void didPop() {
     _isPageVisible = false;
     _volumeButtonsEnabled = false;
-    _disposeCamera();
+    _runCameraOp(_disposeCamera);
     _syncOverlay();
     _syncMiniMap();
+  }
+
+  /// Chains a camera open/close operation onto [_cameraOps] so it can't run
+  /// concurrently with another one. A failed op never breaks the chain.
+  Future<void> _runCameraOp(Future<void> Function() op) {
+    final next = _cameraOps.then((_) => op());
+    _cameraOps = next.catchError((_) {});
+    return next;
   }
 
   Future<void> _initializeCamera() async {
@@ -223,10 +250,28 @@ class CameraPageState extends State<CameraPage>
       return true;
     });
 
-    await _setupCamera();
+    await _runCameraOp(_setupCamera);
   }
 
   Future<void> _setupCamera() async {
+    // Already have a working camera — don't open a second connection on top of
+    // it (just make sure it's recording).
+    if (controller != null && controller!.value.isInitialized) {
+      if (_isPageVisible && !isRecording) {
+        _startRecording();
+      }
+      return;
+    }
+    // A half-open controller is lingering — release it first so we never hold
+    // two camera connections at once.
+    if (controller != null) {
+      await _disposeCamera();
+    }
+
+    if (_cameraInitFailed && mounted) {
+      setState(() => _cameraInitFailed = false);
+    }
+
     _cameras = await availableCameras();
 
     CameraDescription? backCamera;
@@ -281,6 +326,16 @@ class CameraPageState extends State<CameraPage>
     }
 
     if (!mounted) {
+      return;
+    }
+
+    if (controller == null) {
+      // Every attempt failed and the camera is still not open. Surface a retry
+      // button instead of leaving the user stuck on an endless spinner (which
+      // previously could only be escaped by restarting the app).
+      if (_isPageVisible) {
+        setState(() => _cameraInitFailed = true);
+      }
       return;
     }
 
@@ -682,10 +737,49 @@ class CameraPageState extends State<CameraPage>
               ),
             ],
           );
+        } else if (_cameraInitFailed) {
+          return _buildCameraError(context);
         } else {
           return const Center(child: CircularProgressIndicator());
         }
       },
+    );
+  }
+
+  Widget _buildCameraError(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.videocam_off,
+              size: 48,
+              color: colorScheme.onSurface,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              "Couldn't open the camera.",
+              style: textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            FilledButton.tonalIcon(
+              onPressed: () {
+                setState(() {
+                  _cameraInitFailed = false;
+                  _initializeControllerFuture = _runCameraOp(_setupCamera);
+                });
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

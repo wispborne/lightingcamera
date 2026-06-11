@@ -51,14 +51,8 @@ android {
         debug {
             applicationIdSuffix = ".dev"
             resValue("string", "app_name", "LC Dev")
-            ndk {
-                abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
-            }
         }
         release {
-            ndk {
-                abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
-            }
             signingConfig = signingConfigs.getByName("debug")
             resValue("string", "app_name", "lightingcamera")
         }

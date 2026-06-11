@@ -37,7 +37,10 @@ export function startServer(config, log, subscribers, history) {
     ? createHttps({ cert: readFileSync(tls.certPath), key: readFileSync(tls.keyPath) })
     : createHttp();
 
-  const wss = new WebSocketServer({ server: http });
+  // Legitimate client messages (auth, subscription) are under 100 bytes; cap the
+  // payload so a stranger can't make us buffer and JSON.parse a huge message
+  // before auth kicks them.
+  const wss = new WebSocketServer({ server: http, maxPayload: 4096 });
 
   wss.on('connection', (socket, req) => {
     const ip = trustedIp(req);

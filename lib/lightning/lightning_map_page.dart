@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:signals/signals_flutter.dart';
 
 import 'package:lightingcamera/lightning/lightning_service.dart';
+import 'package:lightingcamera/lightning/rain_radar_service.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
 import 'package:lightingcamera/utils/logging.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
@@ -38,6 +40,7 @@ class _LightningMapPageState extends State<LightningMapPage> {
     // Reuse the location the camera page already resolved, if any, so the map
     // opens in the right place on the first frame instead of at the fallback.
     _userLocation = lightningService.lastCenter;
+    rainRadarService.acquire();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -110,6 +113,7 @@ class _LightningMapPageState extends State<LightningMapPage> {
   void dispose() {
     _ticker?.cancel();
     lightningService.release();
+    rainRadarService.release();
     _mapController.dispose();
     super.dispose();
   }
@@ -206,6 +210,7 @@ class _LightningMapPageState extends State<LightningMapPage> {
     final strikeCount = lightningService.strikes.value.length;
     final connected = lightningService.connected.value;
     final showThunder = settingsManager.showThunderCircles;
+    final showRadar = settingsManager.rainRadarEnabled;
     final bottomInset = MediaQuery.of(context).padding.bottom;
 
     // Without a key the relay won't connect; nudge the user to Settings rather
@@ -233,6 +238,19 @@ class _LightningMapPageState extends State<LightningMapPage> {
         title: Text('Lightning Map', style: text.titleLarge),
         backgroundColor: colors.surface.withValues(alpha: 0.8),
         actions: [
+          IconButton(
+            tooltip: showRadar ? 'Hide rain radar' : 'Show rain radar',
+            icon: Icon(
+              Symbols.rainy,
+              color: showRadar
+                  ? colors.primary
+                  : colors.onSurfaceVariant.withAlpha(150),
+            ),
+            onPressed: () async {
+              await settingsManager.setRainRadarEnabled(!showRadar);
+              setState(() {});
+            },
+          ),
           IconButton(
             tooltip: showThunder
                 ? 'Hide thunder circles'
@@ -263,6 +281,25 @@ class _LightningMapPageState extends State<LightningMapPage> {
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.wisp.lightingcamera',
+              ),
+              // Rain radar sits above the base map but below the strikes, so the
+              // lightning markers stay crisp on top. Hidden (null template) when
+              // the setting is off or no fresh frame is available.
+              SignalBuilder(
+                builder: (context) {
+                  final template = rainRadarService.tileUrlTemplate.value;
+                  if (template == null) return const SizedBox.shrink();
+                  return Opacity(
+                    opacity: 0.7,
+                    child: TileLayer(
+                      urlTemplate: template,
+                      userAgentPackageName: 'com.wisp.lightingcamera',
+                      // RainViewer caps radar tiles here; upscale for closer
+                      // views rather than fetching its error placeholder.
+                      maxNativeZoom: RainRadarService.maxNativeZoom,
+                    ),
+                  );
+                },
               ),
               if (showThunder) CircleLayer(circles: _buildThunderCircles()),
               MarkerLayer(markers: _buildMarkers()),
@@ -332,6 +369,24 @@ class _LightningMapPageState extends State<LightningMapPage> {
                           ),
                         ],
                       ),
+                    ),
+                    // Required RainViewer attribution — only while a radar frame
+                    // is actually on screen.
+                    SignalBuilder(
+                      builder: (context) {
+                        if (rainRadarService.tileUrlTemplate.value == null) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: Text(
+                            'Radar © RainViewer',
+                            style: text.labelSmall?.copyWith(
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),

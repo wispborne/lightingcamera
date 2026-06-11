@@ -178,6 +178,106 @@ thunderButton.addEventListener('click', () => {
 applyThunderState();
 
 // ---------------------------------------------------------------------------
+// Rain radar: the latest precipitation frame from RainViewer's free public API,
+// drawn as a translucent tile layer. It lives in Leaflet's tile pane, below the
+// strike canvas (z-index 500), so lightning always stays on top. Mirrors the
+// app's rain_radar_service.dart — latest frame only, 5-minute refresh, hidden
+// once the newest frame is older than 30 minutes.
+
+const RADAR_INDEX_URL = 'https://api.rainviewer.com/public/weather-maps.json';
+const RADAR_REFRESH_MS = 5 * 60 * 1000;
+const RADAR_MAX_FRAME_AGE_MS = 30 * 60 * 1000;
+
+const radarButton = document.getElementById('radar-toggle');
+const radarOpacityControl = document.getElementById('radar-opacity');
+const radarOpacitySlider = document.getElementById('radar-opacity-slider');
+let radarEnabled = localStorage.getItem('rainRadar') !== '0'; // default on
+let radarLayer = null;
+let radarTimer = null;
+
+// Layer transparency, 0–1. Defaults to 0.3 so the base map reads through.
+const storedOpacity = parseFloat(localStorage.getItem('rainRadarOpacity'));
+let radarOpacity = Number.isFinite(storedOpacity) ? storedOpacity : 0.3;
+radarOpacitySlider.value = radarOpacity;
+
+function removeRadarLayer() {
+  if (radarLayer) {
+    map.removeLayer(radarLayer);
+    radarLayer = null;
+  }
+}
+
+// RainViewer tile shape: 256px tiles, Universal Blue scheme (2), smoothing +
+// snow (1_1). The host and frame path come from the index.
+async function refreshRadar() {
+  if (!radarEnabled) return;
+  try {
+    const res = await fetch(RADAR_INDEX_URL, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const host = data && data.host;
+    const past = data && data.radar && data.radar.past;
+    if (!host || !Array.isArray(past) || past.length === 0) return;
+
+    const newest = past[past.length - 1];
+    if (!newest || !newest.path || typeof newest.time !== 'number') return;
+
+    // Staleness guard: never present old rain as current.
+    if (Date.now() - newest.time * 1000 > RADAR_MAX_FRAME_AGE_MS) {
+      removeRadarLayer();
+      return;
+    }
+
+    const url = `${host}${newest.path}/256/{z}/{x}/{y}/2/1_1.png`;
+    if (radarLayer) {
+      radarLayer.setUrl(url);
+    } else {
+      radarLayer = L.tileLayer(url, {
+        opacity: radarOpacity,
+        zIndex: 250, // above the base map, below the strike canvas
+        // RainViewer only renders radar up to zoom 7 (256px tiles); past that it
+        // serves a static "Zoom level not supported" placeholder. Cap native
+        // requests here and let Leaflet upscale the z7 tile for closer views.
+        maxNativeZoom: 7,
+        attribution:
+          'Radar &copy; <a href="https://www.rainviewer.com/">RainViewer</a>',
+      }).addTo(map);
+    }
+  } catch (err) {
+    // A network hiccup or the free API going away: keep the last frame (until it
+    // ages out) and retry next tick. The map never blocks on this.
+    console.warn('Rain radar refresh failed:', err);
+  }
+}
+
+function applyRadarState() {
+  radarButton.classList.toggle('active', radarEnabled);
+  radarOpacityControl.hidden = !radarEnabled;
+  clearInterval(radarTimer);
+  radarTimer = null;
+  if (radarEnabled) {
+    refreshRadar();
+    radarTimer = setInterval(refreshRadar, RADAR_REFRESH_MS);
+  } else {
+    removeRadarLayer();
+  }
+}
+
+radarButton.addEventListener('click', () => {
+  radarEnabled = !radarEnabled;
+  localStorage.setItem('rainRadar', radarEnabled ? '1' : '0');
+  applyRadarState();
+});
+
+radarOpacitySlider.addEventListener('input', () => {
+  radarOpacity = parseFloat(radarOpacitySlider.value);
+  localStorage.setItem('rainRadarOpacity', String(radarOpacity));
+  if (radarLayer) radarLayer.setOpacity(radarOpacity);
+});
+
+applyRadarState();
+
+// ---------------------------------------------------------------------------
 // Tick sound: a short Geiger-style click for every live strike that lands inside
 // the current view. Synthesized with WebAudio so there's no asset to load.
 
