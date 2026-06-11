@@ -87,6 +87,9 @@ class MyHomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(
+      // Black so the letterbox bars around the full-frame preview read as a
+      // camera viewfinder rather than blank theme-colored space.
+      backgroundColor: Colors.black,
       body: CameraPage(),
     );
   }

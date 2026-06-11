@@ -10,6 +10,7 @@ import 'package:lightingcamera/lightning/strike_overlay_controller.dart';
 import 'package:lightingcamera/lightning/strike_projection.dart';
 import 'package:lightingcamera/sensors/orientation_service.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
+import 'package:lightingcamera/utils/units.dart';
 
 /// Transparent layer drawn over the camera feed showing the most recent strikes
 /// anchored to their real-world direction. In-view strikes appear as glowing
@@ -18,9 +19,19 @@ import 'package:lightingcamera/settings/settings_manager.dart';
 /// Hides itself entirely when the overlay setting is off, or when location or
 /// orientation data isn't available, so the camera is never affected.
 class StrikeOverlay extends StatelessWidget {
-  const StrikeOverlay({super.key, required this.controller});
+  const StrikeOverlay({
+    super.key,
+    required this.controller,
+    required this.previewAspectRatio,
+  });
 
   final StrikeOverlayController controller;
+
+  /// The on-screen camera frame's width-over-height. The camera image is shown
+  /// with `BoxFit.contain`, so it sits in a centered rectangle of this shape
+  /// (with letterbox bars filling the rest). Markers are placed within that
+  /// rectangle so they line up with the visible image.
+  final double previewAspectRatio;
 
   /// How many of the most recent strikes to show.
   static const int _maxStrikes = 5;
@@ -64,17 +75,45 @@ class StrikeOverlay extends StatelessWidget {
           !calibrationSuppressed;
       // Fimber.i("Accuracy: ${accuracyRad}");
 
-      // Newest strikes first, capped at five.
-      final strikes = lightningService.strikes.value.toList()
-        ..sort((a, b) => b.time.compareTo(a.time));
+      // Within range and newest first, capped at five. Distant strikes are
+      // dropped entirely — no marker and no edge arrow.
+      final maxDistanceKm = settingsManager.maxStrikeDistanceKmSignal.value;
+      final strikes =
+          lightningService.strikes.value
+              .where(
+                (s) =>
+                    _distance.as(LengthUnit.Kilometer, user, s.position) <=
+                    maxDistanceKm,
+              )
+              .toList()
+            ..sort((a, b) => b.time.compareTo(a.time));
       final recent = strikes.take(_maxStrikes).toList();
+
+      final unitSystem = settingsManager.unitSystemSignal.value;
 
       return LayoutBuilder(
         builder: (context, constraints) {
-          final size = constraints.biggest;
-          if (size.isEmpty) return const SizedBox.shrink();
+          final screen = constraints.biggest;
+          if (screen.isEmpty) return const SizedBox.shrink();
 
-          // Vertical FOV follows the horizontal FOV and the view's aspect.
+          // The camera image is letterboxed (BoxFit.contain), so it fills only a
+          // centered rectangle of the screen at its own aspect ratio. Project
+          // into that rectangle so markers track the visible frame, not the
+          // black bars.
+          final screenAspect = screen.width / screen.height;
+          final double rectW, rectH;
+          if (previewAspectRatio > screenAspect) {
+            rectW = screen.width;
+            rectH = screen.width / previewAspectRatio;
+          } else {
+            rectH = screen.height;
+            rectW = screen.height * previewAspectRatio;
+          }
+          final originX = (screen.width - rectW) / 2;
+          final originY = (screen.height - rectH) / 2;
+          final size = Size(rectW, rectH);
+
+          // Vertical FOV follows the horizontal FOV and the frame's aspect.
           final halfTanH = math.tan(hFov * math.pi / 180 / 2);
           final vFov =
               2 *
@@ -132,6 +171,7 @@ class StrikeOverlay extends StatelessWidget {
                     opacity,
                     colors,
                     size,
+                    unitSystem,
                   ),
                 );
               }
@@ -150,11 +190,21 @@ class StrikeOverlay extends StatelessWidget {
           }
 
           // The markers, arrows, and labels never take pointers so camera
-          // gestures pass through. The calibration banner sits outside the
-          // IgnorePointer so its "Mute" button stays tappable.
+          // gestures pass through. They're positioned relative to the camera
+          // frame's rectangle (offset from the screen edge by the letterbox
+          // bars). The calibration banner sits outside the IgnorePointer, on the
+          // full screen, so its "Mute" button stays tappable.
           return Stack(
             children: [
-              IgnorePointer(child: Stack(children: children)),
+              Positioned(
+                left: originX,
+                top: originY,
+                width: rectW,
+                height: rectH,
+                child: IgnorePointer(
+                  child: Stack(clipBehavior: Clip.none, children: children),
+                ),
+              ),
               if (poorAccuracy) _calibrationBanner(colors, text),
             ],
           );
@@ -200,11 +250,10 @@ class StrikeOverlay extends StatelessWidget {
     double opacity,
     ColorScheme colors,
     Size viewSize,
+    UnitSystem unitSystem,
   ) {
     final distKm = _distance.as(LengthUnit.Kilometer, user, strike.position);
-    final distText = distKm < 1
-        ? '${(distKm * 1000).round()} m'
-        : '${distKm.toStringAsFixed(1)} km';
+    final distText = formatDistanceKm(distKm, unitSystem);
 
     final thunderDelaySec = distKm * 1000 / _speedOfSound;
     final ageSec = DateTime.now().difference(strike.time).inMilliseconds / 1000;

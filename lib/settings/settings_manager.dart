@@ -2,7 +2,17 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:signals/signals.dart';
 
+import 'package:lightingcamera/utils/units.dart';
+
 final settingsManager = SettingsManager();
+
+/// Shape of the frames the camera captures.
+///
+/// [wide16x9] is the default 16:9 stream — sharper, but trims the top and
+/// bottom of the sensor. [full4x3] uses the sensor's native 4:3 shape for a
+/// taller field of view (matching the stock camera's photo mode), at the cost
+/// of a little resolution.
+enum CaptureAspect { wide16x9, full4x3 }
 
 class SettingsManager {
   static const _shutterOffsetXKey = 'shutter_offset_x';
@@ -22,6 +32,13 @@ class SettingsManager {
   static const _cacheInfoCollapsedKey = 'cache_info_collapsed';
   static const _calibrationSuppressedUntilKey = 'calibration_suppressed_until';
   static const _skipGalleryExitWarningKey = 'skip_gallery_exit_warning';
+  static const _captureAspectKey = 'capture_aspect';
+  static const _unitSystemKey = 'unit_system';
+  static const _maxStrikeDistanceKmKey = 'max_strike_distance_km';
+
+  /// Bounds for the overlay's maximum strike distance, in kilometres.
+  static const double minStrikeDistanceKm = 5;
+  static const double maxStrikeDistanceKm = 100;
 
   late final Signal<double> _shutterOffsetX;
   ReadonlySignal<double> get shutterOffsetXSignal => _shutterOffsetX;
@@ -119,6 +136,24 @@ class SettingsManager {
       _skipGalleryExitWarning;
   bool get skipGalleryExitWarning => _skipGalleryExitWarning.value;
 
+  /// The shape of the frames the camera captures. Defaults to [wide16x9].
+  /// Changing it makes the camera page reconnect at the new resolution.
+  late final Signal<CaptureAspect> _captureAspect;
+  ReadonlySignal<CaptureAspect> get captureAspectSignal => _captureAspect;
+  CaptureAspect get captureAspect => _captureAspect.value;
+
+  /// Which measurement system distances are shown in. Defaults to
+  /// [UnitSystem.system], which follows the device locale.
+  late final Signal<UnitSystem> _unitSystem;
+  ReadonlySignal<UnitSystem> get unitSystemSignal => _unitSystem;
+  UnitSystem get unitSystem => _unitSystem.value;
+
+  /// Strikes farther than this from the user aren't drawn on the overlay.
+  /// Clamped to [minStrikeDistanceKm]–[maxStrikeDistanceKm]; defaults to 75 km.
+  late final Signal<double> _maxStrikeDistanceKm;
+  ReadonlySignal<double> get maxStrikeDistanceKmSignal => _maxStrikeDistanceKm;
+  double get maxStrikeDistanceKmValue => _maxStrikeDistanceKm.value;
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getDouble(_shutterOffsetXKey) ?? 0.0;
@@ -149,6 +184,24 @@ class SettingsManager {
     );
     _skipGalleryExitWarning = signal(
       prefs.getBool(_skipGalleryExitWarningKey) ?? false,
+    );
+    final aspectName = prefs.getString(_captureAspectKey);
+    _captureAspect = signal(
+      CaptureAspect.values.firstWhere(
+        (a) => a.name == aspectName,
+        orElse: () => CaptureAspect.wide16x9,
+      ),
+    );
+    final unitName = prefs.getString(_unitSystemKey);
+    _unitSystem = signal(
+      UnitSystem.values.firstWhere(
+        (u) => u.name == unitName,
+        orElse: () => UnitSystem.system,
+      ),
+    );
+    final storedDistance = prefs.getDouble(_maxStrikeDistanceKmKey) ?? 75.0;
+    _maxStrikeDistanceKm = signal(
+      storedDistance.clamp(minStrikeDistanceKm, maxStrikeDistanceKm),
     );
   }
 
@@ -252,6 +305,27 @@ class SettingsManager {
     _skipGalleryExitWarning.value = skip;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_skipGalleryExitWarningKey, skip);
+  }
+
+  Future<void> setCaptureAspect(CaptureAspect aspect) async {
+    _captureAspect.value = aspect;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_captureAspectKey, aspect.name);
+  }
+
+  Future<void> setUnitSystem(UnitSystem system) async {
+    _unitSystem.value = system;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_unitSystemKey, system.name);
+  }
+
+  Future<void> setMaxStrikeDistanceKm(double km) async {
+    _maxStrikeDistanceKm.value = km.clamp(
+      minStrikeDistanceKm,
+      maxStrikeDistanceKm,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_maxStrikeDistanceKmKey, _maxStrikeDistanceKm.value);
   }
 
   void enterRepositionMode() {

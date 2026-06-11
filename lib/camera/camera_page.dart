@@ -43,6 +43,19 @@ class CameraPageState extends State<CameraPage>
   // instead of an endless spinner.
   bool _cameraInitFailed = false;
 
+  // The capture shape the current controller was opened with. Used to detect
+  // when the user changes the aspect-ratio setting so we can reconnect.
+  CaptureAspect? _appliedAspect;
+  void Function()? _captureAspectEffectDispose;
+
+  /// Maps the capture-shape setting to a camera resolution. The 16:9 stream is
+  /// sharper; the 4:3 stream keeps the sensor's full height (a taller view) at a
+  /// lower resolution.
+  ResolutionPreset _resolutionPresetFor(CaptureAspect aspect) =>
+      aspect == CaptureAspect.full4x3
+      ? ResolutionPreset.medium
+      : ResolutionPreset.high;
+
   img_lib.Image? displayImage;
   int _imagesCapturedLastSecond = 0;
   int _fps = 0;
@@ -100,6 +113,22 @@ class CameraPageState extends State<CameraPage>
       settingsManager.miniMapEnabledSignal.value;
       _syncMiniMap();
     });
+
+    // Reconnect the camera at the new resolution whenever the capture-shape
+    // setting changes. The first run just records the starting value — the
+    // initial open is handled by _initializeCamera above.
+    _captureAspectEffectDispose = effect(() {
+      final aspect = settingsManager.captureAspectSignal.value;
+      if (_appliedAspect == null || aspect == _appliedAspect) {
+        return;
+      }
+      _appliedAspect = aspect;
+      _initializeControllerFuture = _runCameraOp(() async {
+        await _disposeCamera();
+        await _setupCamera();
+      });
+      if (mounted) setState(() {});
+    });
   }
 
   /// Run the overlay only when the page is visible and the setting is on;
@@ -155,6 +184,7 @@ class CameraPageState extends State<CameraPage>
     _overlayController.stop();
     _miniMapEffectDispose?.call();
     _miniMapController.stop();
+    _captureAspectEffectDispose?.call();
     _runCameraOp(_disposeCamera);
     super.dispose();
   }
@@ -288,12 +318,13 @@ class CameraPageState extends State<CameraPage>
     // resolution isn't ready yet and the plugin's internal null check fails
     // (a plain TypeError, not a CameraException). Retry with a fresh
     // controller a few times before giving up.
+    final aspect = settingsManager.captureAspect;
+    _appliedAspect = aspect;
+    final preset = _resolutionPresetFor(aspect);
+
     const maxAttempts = 3;
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-      final newController = CameraController(
-        selectedCamera,
-        ResolutionPreset.high,
-      );
+      final newController = CameraController(selectedCamera, preset);
       try {
         await newController.initialize();
 
@@ -546,7 +577,10 @@ class CameraPageState extends State<CameraPage>
                       DeviceOrientation.portraitUp;
                   return SizedBox.expand(
                     child: FittedBox(
-                      fit: BoxFit.cover,
+                      // Show the whole frame (letterboxed) rather than cropping
+                      // the edges to fill the screen — cropping made the view
+                      // look far more zoomed-in than what's actually captured.
+                      fit: BoxFit.contain,
                       child: SizedBox(
                         width: controller!.value.previewSize!.height,
                         height: controller!.value.previewSize!.width,
@@ -557,7 +591,15 @@ class CameraPageState extends State<CameraPage>
                 },
               ),
               Positioned.fill(
-                child: StrikeOverlay(controller: _overlayController),
+                child: StrikeOverlay(
+                  controller: _overlayController,
+                  // The on-screen frame's shape, so the overlay can line its
+                  // markers up with the letterboxed image instead of the full
+                  // screen.
+                  previewAspectRatio:
+                      controller!.value.previewSize!.height /
+                      controller!.value.previewSize!.width,
+                ),
               ),
               Positioned(
                 top: topInset,

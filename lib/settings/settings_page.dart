@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:signals/signals_flutter.dart';
 import 'package:lightingcamera/lightning/lightning_service.dart';
+import 'package:lightingcamera/utils/units.dart';
 import 'settings_manager.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -182,6 +183,97 @@ class _SettingsPageState extends State<SettingsPage> {
               context.pop();
             },
           ),
+          Watch((context) {
+            final aspect = settingsManager.captureAspectSignal.value;
+            return ListTile(
+              title: const Text('Capture shape'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Wide is sharper; Tall shows more above and below at a '
+                    'little less detail.',
+                  ),
+                  const SizedBox(height: 8),
+                  SegmentedButton<CaptureAspect>(
+                    segments: const [
+                      ButtonSegment(
+                        value: CaptureAspect.wide16x9,
+                        label: Text('Wide 16:9'),
+                      ),
+                      ButtonSegment(
+                        value: CaptureAspect.full4x3,
+                        label: Text('Tall 4:3'),
+                      ),
+                    ],
+                    selected: {aspect},
+                    onSelectionChanged: (selection) =>
+                        settingsManager.setCaptureAspect(selection.first),
+                  ),
+                ],
+              ),
+            );
+          }),
+          SignalBuilder(builder: (context) {
+            final units = settingsManager.unitSystemSignal.value;
+            return ListTile(
+              title: const Text('Distance units'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Units for strike distances on the overlay.'),
+                  const SizedBox(height: 8),
+                  SegmentedButton<UnitSystem>(
+                    segments: const [
+                      ButtonSegment(
+                        value: UnitSystem.system,
+                        label: Text('Auto'),
+                      ),
+                      ButtonSegment(
+                        value: UnitSystem.metric,
+                        label: Text('Metric'),
+                      ),
+                      ButtonSegment(
+                        value: UnitSystem.imperial,
+                        label: Text('Imperial'),
+                      ),
+                    ],
+                    selected: {units},
+                    onSelectionChanged: (selection) =>
+                        settingsManager.setUnitSystem(selection.first),
+                  ),
+                ],
+              ),
+            );
+          }),
+          SignalBuilder(builder: (context) {
+            final enabled = settingsManager.strikeOverlayEnabledSignal.value;
+            final distance = settingsManager.maxStrikeDistanceKmSignal.value;
+            return ListTile(
+              enabled: enabled,
+              title: const Text('Maximum strike distance'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Hide strikes farther away than this.'),
+                  Slider(
+                    value: distance,
+                    min: SettingsManager.minStrikeDistanceKm,
+                    max: SettingsManager.maxStrikeDistanceKm,
+                    divisions:
+                        (SettingsManager.maxStrikeDistanceKm -
+                                SettingsManager.minStrikeDistanceKm)
+                            ~/ 5,
+                    label: '${distance.round()} km',
+                    onChanged: enabled
+                        ? settingsManager.setMaxStrikeDistanceKm
+                        : null,
+                  ),
+                ],
+              ),
+              trailing: Text('${distance.round()} km'),
+            );
+          }),
           Watch(
             (context) => SwitchListTile(
               title: const Text('Lightning test mode'),
