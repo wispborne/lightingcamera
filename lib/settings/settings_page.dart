@@ -214,6 +214,17 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             );
           }),
+          SignalBuilder(
+            builder: (context) => SwitchListTile(
+              title: const Text('Tag photos with location'),
+              subtitle: const Text(
+                'Save each photo with the current GPS location in its details. '
+                'Needs location permission.',
+              ),
+              value: settingsManager.geotagPhotosSignal.value,
+              onChanged: settingsManager.setGeotagPhotos,
+            ),
+          ),
           SignalBuilder(builder: (context) {
             final units = settingsManager.unitSystemSignal.value;
             return ListTile(
@@ -244,34 +255,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ],
               ),
-            );
-          }),
-          SignalBuilder(builder: (context) {
-            final enabled = settingsManager.strikeOverlayEnabledSignal.value;
-            final distance = settingsManager.maxStrikeDistanceKmSignal.value;
-            return ListTile(
-              enabled: enabled,
-              title: const Text('Maximum strike distance'),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Hide strikes farther away than this.'),
-                  Slider(
-                    value: distance,
-                    min: SettingsManager.minStrikeDistanceKm,
-                    max: SettingsManager.maxStrikeDistanceKm,
-                    divisions:
-                        (SettingsManager.maxStrikeDistanceKm -
-                                SettingsManager.minStrikeDistanceKm)
-                            ~/ 5,
-                    label: '${distance.round()} km',
-                    onChanged: enabled
-                        ? settingsManager.setMaxStrikeDistanceKm
-                        : null,
-                  ),
-                ],
-              ),
-              trailing: Text('${distance.round()} km'),
             );
           }),
           Watch(
@@ -309,6 +292,66 @@ class _SettingsPageState extends State<SettingsPage> {
                   : null,
             ),
           ),
+          SignalBuilder(builder: (context) {
+            final enabled = settingsManager.strikeOverlayEnabledSignal.value;
+            final distance = settingsManager.maxStrikeDistanceKmSignal.value;
+            return ListTile(
+              enabled: enabled,
+              title: const Text('Overlay strike distance'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Hide strikes farther than this from the camera overlay. '
+                    'The full map still shows every strike.',
+                  ),
+                  Slider(
+                    value: distance,
+                    min: SettingsManager.minStrikeDistanceKm,
+                    max: SettingsManager.maxStrikeDistanceKm,
+                    divisions:
+                        (SettingsManager.maxStrikeDistanceKm -
+                                SettingsManager.minStrikeDistanceKm)
+                            ~/ 5,
+                    label: '${distance.round()} km',
+                    onChanged: enabled
+                        ? settingsManager.setMaxStrikeDistanceKm
+                        : null,
+                  ),
+                ],
+              ),
+              trailing: Text('${distance.round()} km'),
+            );
+          }),
+          SignalBuilder(builder: (context) {
+            final threshold = settingsManager.lightningThresholdSignal.value;
+            return ListTile(
+              title: const Text('Lightning sensitivity'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'How sure the detector must be to flag a captured frame as '
+                    'lightning. Lower catches faint bolts (and more false '
+                    'alarms); higher keeps only obvious strikes.',
+                  ),
+                  Slider(
+                    value: threshold,
+                    min: SettingsManager.minLightningThreshold,
+                    max: SettingsManager.maxLightningThreshold,
+                    divisions:
+                        ((SettingsManager.maxLightningThreshold -
+                                    SettingsManager.minLightningThreshold) *
+                                20)
+                            .round(),
+                    label: '${(threshold * 100).round()}%',
+                    onChanged: settingsManager.setLightningThreshold,
+                  ),
+                ],
+              ),
+              trailing: Text('${(threshold * 100).round()}%'),
+            );
+          }),
           Watch(
             (context) => SwitchListTile(
               title: const Text('Mini map'),

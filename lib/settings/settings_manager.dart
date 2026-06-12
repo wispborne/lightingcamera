@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:signals/signals.dart';
 
@@ -15,6 +16,9 @@ final settingsManager = SettingsManager();
 enum CaptureAspect { wide16x9, full4x3 }
 
 class SettingsManager {
+  /// Legacy key holding a single shutter offset for every orientation. Kept so
+  /// existing installs migrate their old position into the new per-orientation
+  /// map on first launch.
   static const _shutterOffsetXKey = 'shutter_offset_x';
   static const _lightningTestModeKey = 'lightning_test_mode';
   static const _showThunderCirclesKey = 'show_thunder_circles';
@@ -33,16 +37,43 @@ class SettingsManager {
   static const _calibrationSuppressedUntilKey = 'calibration_suppressed_until';
   static const _skipGalleryExitWarningKey = 'skip_gallery_exit_warning';
   static const _captureAspectKey = 'capture_aspect';
+  static const _cameraZoomKey = 'camera_zoom';
   static const _unitSystemKey = 'unit_system';
   static const _maxStrikeDistanceKmKey = 'max_strike_distance_km';
+  static const _lightningThresholdKey = 'lightning_confidence_threshold';
+  static const _geotagPhotosKey = 'geotag_photos';
 
   /// Bounds for the overlay's maximum strike distance, in kilometres.
   static const double minStrikeDistanceKm = 5;
   static const double maxStrikeDistanceKm = 100;
 
-  late final Signal<double> _shutterOffsetX;
-  ReadonlySignal<double> get shutterOffsetXSignal => _shutterOffsetX;
-  double get shutterOffsetX => _shutterOffsetX.value;
+  /// Bounds for the gallery's lightning-detection confidence threshold (0–1).
+  /// The classifier's own confidence floor is pinned at or below the minimum so
+  /// the whole slider range has data to filter against.
+  static const double minLightningThreshold = 0.10;
+  static const double maxLightningThreshold = 0.90;
+
+  /// Position of the shutter button as a fraction of its travel region —
+  /// (0, 0) is the top-left, (1, 1) the bottom-right. Stored separately for each
+  /// phone orientation so the button stays where the user put it in portrait
+  /// without dragging it back when they rotate.
+  late final Signal<Map<DeviceOrientation, Offset>> _shutterOffsets;
+  ReadonlySignal<Map<DeviceOrientation, Offset>> get shutterOffsetsSignal =>
+      _shutterOffsets;
+
+  /// Where the shutter button sits before the user moves it: centred
+  /// horizontally, near the bottom of the screen (its old fixed home).
+  static const defaultShutterOffset = Offset(0.5, 0.92);
+
+  /// The saved shutter position for [orientation], or [defaultShutterOffset] if
+  /// the user has never positioned the button in that orientation.
+  Offset shutterOffsetFor(DeviceOrientation orientation) =>
+      _shutterOffsets.value[orientation] ?? defaultShutterOffset;
+
+  String _shutterOffsetXKeyFor(DeviceOrientation orientation) =>
+      'shutter_offset_x_${orientation.name}';
+  String _shutterOffsetYKeyFor(DeviceOrientation orientation) =>
+      'shutter_offset_y_${orientation.name}';
 
   late final Signal<bool> _isRepositioning;
   ReadonlySignal<bool> get isRepositioningSignal => _isRepositioning;
@@ -142,6 +173,13 @@ class SettingsManager {
   ReadonlySignal<CaptureAspect> get captureAspectSignal => _captureAspect;
   CaptureAspect get captureAspect => _captureAspect.value;
 
+  /// The camera's last zoom ratio (e.g. 1.0 = "1×"). Remembered so the camera
+  /// reopens at the framing the user left it at — phones with an ultra-wide can
+  /// go below 1.0. Defaults to 1.0; the camera clamps it to its real range.
+  late final Signal<double> _cameraZoom;
+  ReadonlySignal<double> get cameraZoomSignal => _cameraZoom;
+  double get cameraZoom => _cameraZoom.value;
+
   /// Which measurement system distances are shown in. Defaults to
   /// [UnitSystem.system], which follows the device locale.
   late final Signal<UnitSystem> _unitSystem;
@@ -154,10 +192,40 @@ class SettingsManager {
   ReadonlySignal<double> get maxStrikeDistanceKmSignal => _maxStrikeDistanceKm;
   double get maxStrikeDistanceKmValue => _maxStrikeDistanceKm.value;
 
+  /// Minimum "Lightning" confidence (0–1) for a captured frame to count as a
+  /// detection in the gallery. Clamped to
+  /// [minLightningThreshold]–[maxLightningThreshold]; defaults to 0.40. Read
+  /// live by the gallery and detection service so changing it re-filters
+  /// results without rescanning.
+  late final Signal<double> _lightningThreshold;
+  ReadonlySignal<double> get lightningThresholdSignal => _lightningThreshold;
+  double get lightningThreshold => _lightningThreshold.value;
+
+  /// When on, saved photos are tagged with the device's current GPS location in
+  /// their EXIF data. On by default; falls back to saving without a location
+  /// when location services or permission aren't available.
+  late final Signal<bool> _geotagPhotos;
+  ReadonlySignal<bool> get geotagPhotosSignal => _geotagPhotos;
+  bool get geotagPhotos => _geotagPhotos.value;
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
-    final stored = prefs.getDouble(_shutterOffsetXKey) ?? 0.0;
-    _shutterOffsetX = signal(stored);
+    // Per-orientation shutter positions. The X for each orientation falls back
+    // to the old single value (for installs from before this was split out),
+    // then to the default. Y is newer still, so it just uses the default.
+    final legacyOffsetX = prefs.getDouble(_shutterOffsetXKey);
+    final offsets = <DeviceOrientation, Offset>{};
+    for (final orientation in DeviceOrientation.values) {
+      final x =
+          prefs.getDouble(_shutterOffsetXKeyFor(orientation)) ??
+          legacyOffsetX ??
+          defaultShutterOffset.dx;
+      final y =
+          prefs.getDouble(_shutterOffsetYKeyFor(orientation)) ??
+          defaultShutterOffset.dy;
+      offsets[orientation] = Offset(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+    }
+    _shutterOffsets = signal(offsets);
     _isRepositioning = signal(false);
     _lightningTestMode = signal(prefs.getBool(_lightningTestModeKey) ?? false);
     _showThunderCircles = signal(prefs.getBool(_showThunderCirclesKey) ?? true);
@@ -192,6 +260,7 @@ class SettingsManager {
         orElse: () => CaptureAspect.wide16x9,
       ),
     );
+    _cameraZoom = signal(prefs.getDouble(_cameraZoomKey) ?? 1.0);
     final unitName = prefs.getString(_unitSystemKey);
     _unitSystem = signal(
       UnitSystem.values.firstWhere(
@@ -203,12 +272,31 @@ class SettingsManager {
     _maxStrikeDistanceKm = signal(
       storedDistance.clamp(minStrikeDistanceKm, maxStrikeDistanceKm),
     );
+    final storedThreshold = prefs.getDouble(_lightningThresholdKey) ?? 0.40;
+    _lightningThreshold = signal(
+      storedThreshold.clamp(minLightningThreshold, maxLightningThreshold),
+    );
+    _geotagPhotos = signal(prefs.getBool(_geotagPhotosKey) ?? true);
   }
 
-  Future<void> setShutterOffsetX(double offset) async {
-    _shutterOffsetX.value = offset.clamp(0.0, 1.0);
+  Future<void> setShutterOffset(
+    DeviceOrientation orientation,
+    Offset offset,
+  ) async {
+    final clamped = Offset(
+      offset.dx.clamp(0.0, 1.0),
+      offset.dy.clamp(0.0, 1.0),
+    );
+    _shutterOffsets.value = {..._shutterOffsets.value, orientation: clamped};
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_shutterOffsetXKey, _shutterOffsetX.value);
+    await prefs.setDouble(_shutterOffsetXKeyFor(orientation), clamped.dx);
+    await prefs.setDouble(_shutterOffsetYKeyFor(orientation), clamped.dy);
+  }
+
+  Future<void> setCameraZoom(double zoom) async {
+    _cameraZoom.value = zoom;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_cameraZoomKey, zoom);
   }
 
   Future<void> setLightningTestMode(bool enabled) async {
@@ -326,6 +414,21 @@ class SettingsManager {
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_maxStrikeDistanceKmKey, _maxStrikeDistanceKm.value);
+  }
+
+  Future<void> setLightningThreshold(double threshold) async {
+    _lightningThreshold.value = threshold.clamp(
+      minLightningThreshold,
+      maxLightningThreshold,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_lightningThresholdKey, _lightningThreshold.value);
+  }
+
+  Future<void> setGeotagPhotos(bool enabled) async {
+    _geotagPhotos.value = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_geotagPhotosKey, enabled);
   }
 
   void enterRepositionMode() {

@@ -14,6 +14,7 @@ import 'package:lightingcamera/main.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
 import 'package:native_device_orientation/native_device_orientation.dart';
 import 'package:lightingcamera/utils/logging.dart';
+import 'package:lightingcamera/utils/volume_key_dispatcher.dart';
 import 'package:signals/signals_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -60,7 +61,12 @@ class CameraPageState extends State<CameraPage>
   int _imagesCapturedLastSecond = 0;
   int _fps = 0;
   bool showLivePreview = false;
-  DeviceOrientation _currentOrientation = DeviceOrientation.portraitUp;
+  // The phone's current orientation. A signal so the shutter button can react
+  // to rotation and show the position saved for that orientation. Also drives
+  // per-frame rotation in the capture stream.
+  final Signal<DeviceOrientation> _currentOrientation = signal(
+    DeviceOrientation.portraitUp,
+  );
 
   // Exposure compensation variables
   double _exposureCompensation = 0.0;
@@ -68,9 +74,19 @@ class CameraPageState extends State<CameraPage>
   double _minExposureCompensation = -2.0;
   double _maxExposureCompensation = 2.0;
 
+  // Pinch-to-zoom. The range is whatever the lens reports (e.g. 0.5×–30× on a
+  // phone with an ultra-wide); _currentZoom is the live ratio and
+  // _zoomAtGestureStart anchors a pinch so it scales smoothly.
+  double _minZoom = 1.0;
+  double _maxZoom = 1.0;
+  double _currentZoom = 1.0;
+  double _zoomAtGestureStart = 1.0;
+
   // Wiggle animation for reposition mode
   late final AnimationController _wiggleController;
-  double? _dragOffsetX;
+  // Live position (0..1 of the travel region) while a reposition drag is in
+  // progress; null when not dragging.
+  Offset? _dragOffset;
 
   // Strike overlay: real-world-anchored markers over the feed.
   final StrikeOverlayController _overlayController = StrikeOverlayController();
@@ -80,10 +96,9 @@ class CameraPageState extends State<CameraPage>
   final MiniMapController _miniMapController = MiniMapController();
   void Function()? _miniMapEffectDispose;
 
-  // Volume button shutter via native platform channel
-  static const _volumeKeyChannel = MethodChannel(
-    'com.wisp.lightingcamera/volume_keys',
-  );
+  // Volume button shutter — fed by the shared volume-key dispatcher so the
+  // gallery can take over the keys while it covers this page without breaking
+  // the shutter when we come back.
   bool _volumeButtonsEnabled = true;
   DateTime? _lastShutterTime;
 
@@ -99,7 +114,7 @@ class CameraPageState extends State<CameraPage>
       duration: const Duration(milliseconds: 250),
     );
     _initializeControllerFuture = _initializeCamera();
-    _volumeKeyChannel.setMethodCallHandler(_handleVolumeKey);
+    volumeKeyDispatcher.subscribe(_handleVolumeKey);
 
     // Start/stop the overlay whenever the setting flips (and re-evaluated on
     // visibility changes via _syncOverlay).
@@ -151,17 +166,13 @@ class CameraPageState extends State<CameraPage>
     }
   }
 
-  Future<dynamic> _handleVolumeKey(MethodCall call) async {
-    if (call.method == 'volumeKeyPressed' &&
-        _volumeButtonsEnabled &&
-        _isPageVisible) {
-      final now = DateTime.now();
-      if (_lastShutterTime == null ||
-          now.difference(_lastShutterTime!) >
-              const Duration(milliseconds: 300)) {
-        _lastShutterTime = now;
-        _onShutterPressed();
-      }
+  void _handleVolumeKey() {
+    if (!_volumeButtonsEnabled || !_isPageVisible) return;
+    final now = DateTime.now();
+    if (_lastShutterTime == null ||
+        now.difference(_lastShutterTime!) > const Duration(milliseconds: 300)) {
+      _lastShutterTime = now;
+      _onShutterPressed();
     }
   }
 
@@ -179,7 +190,7 @@ class CameraPageState extends State<CameraPage>
     WidgetsBinding.instance.removeObserver(this);
     routeObserver.unsubscribe(this);
     _wiggleController.dispose();
-    _volumeKeyChannel.setMethodCallHandler(null);
+    volumeKeyDispatcher.unsubscribe(_handleVolumeKey);
     _overlayEffectDispose?.call();
     _overlayController.stop();
     _miniMapEffectDispose?.call();
@@ -331,6 +342,16 @@ class CameraPageState extends State<CameraPage>
         if (newController.value.isInitialized) {
           _minExposureCompensation = await newController.getMinExposureOffset();
           _maxExposureCompensation = await newController.getMaxExposureOffset();
+
+          // Learn the lens's real zoom range. On phones with an ultra-wide the
+          // minimum is below 1.0 (e.g. 0.5×), which is how we let the user pull
+          // back wider than the stock "1×".
+          _minZoom = await newController.getMinZoomLevel();
+          _maxZoom = await newController.getMaxZoomLevel();
+          // Reapply the user's remembered zoom, clamped to what this lens
+          // supports, so framing survives reconnects and restarts.
+          _currentZoom = settingsManager.cameraZoom.clamp(_minZoom, _maxZoom);
+          await newController.setZoomLevel(_currentZoom);
         }
 
         if (!mounted || !_isPageVisible) {
@@ -407,6 +428,33 @@ class CameraPageState extends State<CameraPage>
       await cam.dispose();
     } catch (e) {
       Fimber.e('Error disposing camera: $e', ex: e);
+    }
+  }
+
+  void _onScaleStart(ScaleStartDetails details) {
+    _zoomAtGestureStart = _currentZoom;
+  }
+
+  void _onScaleUpdate(ScaleUpdateDetails details) {
+    // Single-finger pans also fire here with scale == 1; only react to pinches.
+    if (details.pointerCount < 2) return;
+    _setZoom(_zoomAtGestureStart * details.scale);
+  }
+
+  void _onScaleEnd(ScaleEndDetails details) {
+    // Remember the framing so the camera reopens here next time.
+    settingsManager.setCameraZoom(_currentZoom);
+  }
+
+  Future<void> _setZoom(double zoom) async {
+    if (controller == null || !controller!.value.isInitialized) return;
+    final clamped = zoom.clamp(_minZoom, _maxZoom);
+    if (clamped == _currentZoom) return;
+    setState(() => _currentZoom = clamped);
+    try {
+      await controller!.setZoomLevel(clamped);
+    } catch (e) {
+      Fimber.e('Error setting zoom: $e', ex: e);
     }
   }
 
@@ -551,6 +599,33 @@ class CameraPageState extends State<CameraPage>
     );
   }
 
+  /// A small pill showing the live zoom ratio. Tap it to reset to 1×. Hidden
+  /// when the lens can't zoom (min and max are the same).
+  Widget _buildZoomIndicator() {
+    if (_maxZoom <= _minZoom) return const SizedBox.shrink();
+    return GestureDetector(
+      onTap: () async {
+        await _setZoom(1.0);
+        settingsManager.setCameraZoom(_currentZoom);
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          '${_currentZoom.toStringAsFixed(1)}×',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cacheManager = imageCacheManager;
@@ -566,15 +641,40 @@ class CameraPageState extends State<CameraPage>
             _cameras != null &&
             controller!.value.isInitialized &&
             controller!.value.previewSize != null) {
+          // previewSize is reported in the sensor's native (landscape) frame,
+          // so its width is always the long edge. CameraPreview rotates its
+          // contents to match the device orientation, so the box we wrap it in
+          // has to flip shape too — otherwise a landscape preview gets crammed
+          // into a portrait-shaped box and ends up letterboxed with black side
+          // bars and a squished image.
+          final previewSize = controller!.value.previewSize!;
+          final previewIsLandscape =
+              controller!.value.deviceOrientation ==
+                  DeviceOrientation.landscapeLeft ||
+              controller!.value.deviceOrientation ==
+                  DeviceOrientation.landscapeRight;
+          final previewBoxWidth = previewIsLandscape
+              ? previewSize.width
+              : previewSize.height;
+          final previewBoxHeight = previewIsLandscape
+              ? previewSize.height
+              : previewSize.width;
           return Stack(
             children: [
               NativeDeviceOrientationReader(
                 builder: (context) {
-                  _currentOrientation =
+                  final orientation =
                       NativeDeviceOrientationReader.orientation(
                         context,
                       ).deviceOrientation ??
                       DeviceOrientation.portraitUp;
+                  // Defer the update a frame so we never mutate a signal that the
+                  // shutter button's Watch is reading in this same build pass.
+                  if (_currentOrientation.value != orientation) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _currentOrientation.value = orientation;
+                    });
+                  }
                   return SizedBox.expand(
                     child: FittedBox(
                       // Show the whole frame (letterboxed) rather than cropping
@@ -582,13 +682,24 @@ class CameraPageState extends State<CameraPage>
                       // look far more zoomed-in than what's actually captured.
                       fit: BoxFit.contain,
                       child: SizedBox(
-                        width: controller!.value.previewSize!.height,
-                        height: controller!.value.previewSize!.width,
+                        width: previewBoxWidth,
+                        height: previewBoxHeight,
                         child: CameraPreview(controller!),
                       ),
                     ),
                   );
                 },
+              ),
+              // Pinch anywhere on the feed to zoom. Sits above the preview but
+              // below the overlay and the on-screen controls, so the strike
+              // markers, shutter, and buttons keep their own gestures.
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onScaleStart: _onScaleStart,
+                  onScaleUpdate: _onScaleUpdate,
+                  onScaleEnd: _onScaleEnd,
+                ),
               ),
               Positioned.fill(
                 child: StrikeOverlay(
@@ -596,9 +707,7 @@ class CameraPageState extends State<CameraPage>
                   // The on-screen frame's shape, so the overlay can line its
                   // markers up with the letterboxed image instead of the full
                   // screen.
-                  previewAspectRatio:
-                      controller!.value.previewSize!.height /
-                      controller!.value.previewSize!.width,
+                  previewAspectRatio: previewBoxWidth / previewBoxHeight,
                 ),
               ),
               Positioned(
@@ -652,27 +761,6 @@ class CameraPageState extends State<CameraPage>
                                 'Image Count: ${cacheManager.cacheSize.value} | FPS: $_fps | Cache: ${cacheManager.getCacheMemoryUsageMB().toStringAsFixed(1)}MB',
                                 style: const TextStyle(color: Colors.white),
                               ),
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.volume_up,
-                                    color: _volumeButtonsEnabled
-                                        ? Colors.green
-                                        : Colors.orange,
-                                    size: 16,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    'Volume shutter: ${_volumeButtonsEnabled ? "Active" : "Inactive"}',
-                                    style: TextStyle(
-                                      color: _volumeButtonsEnabled
-                                          ? Colors.green
-                                          : Colors.orange,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
                               if (!_isPageVisible || !isRecording)
                                 const Text(
                                   'Recording paused',
@@ -695,15 +783,18 @@ class CameraPageState extends State<CameraPage>
                   ],
                 ),
               ),
-              Watch((context) {
-                final offsetX = settingsManager.shutterOffsetXSignal.watch(
-                  context,
-                );
-                final isRepositioning = settingsManager.isRepositioningSignal
-                    .watch(context);
+              SignalBuilder(builder: (context) {
+                final orientation = _currentOrientation.value;
+                final stored = settingsManager.shutterOffsetFor(orientation);
+                final isRepositioning =
+                    settingsManager.isRepositioningSignal.value;
                 _syncWiggle(isRepositioning);
-                final currentOffset = _dragOffsetX ?? offsetX;
-                return _buildShutterButton(currentOffset, isRepositioning);
+                final currentOffset = _dragOffset ?? stored;
+                return _buildShutterButton(
+                  orientation,
+                  currentOffset,
+                  isRepositioning,
+                );
               }),
               Watch((context) {
                 final isRepositioning = settingsManager.isRepositioningSignal
@@ -777,6 +868,12 @@ class CameraPageState extends State<CameraPage>
                 right: 16,
                 child: _buildVerticalExposureSlider(),
               ),
+              Positioned(
+                bottom: 150,
+                left: 0,
+                right: 0,
+                child: Center(child: _buildZoomIndicator()),
+              ),
             ],
           );
         } else if (_cameraInitFailed) {
@@ -826,7 +923,8 @@ class CameraPageState extends State<CameraPage>
   }
 
   static const _buttonSize = 80.0;
-  static const _buttonPadding = 40.0;
+  // Margin kept between the button and the screen edges as it travels.
+  static const _buttonEdgeMargin = 16.0;
   bool _wiggleActive = false;
 
   void _syncWiggle(bool isRepositioning) {
@@ -846,10 +944,26 @@ class CameraPageState extends State<CameraPage>
     }
   }
 
-  Widget _buildShutterButton(double offsetX, bool isRepositioning) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final draggableWidth = screenWidth - _buttonSize - _buttonPadding * 2;
-    final left = _buttonPadding + draggableWidth * offsetX.clamp(0.0, 1.0);
+  Widget _buildShutterButton(
+    DeviceOrientation orientation,
+    Offset offset,
+    bool isRepositioning,
+  ) {
+    final media = MediaQuery.of(context);
+    final size = media.size;
+    final insets = media.padding;
+
+    // The region the button's top-left corner can occupy: anywhere on screen,
+    // kept a small margin clear of the edges and out from under the status and
+    // navigation bars.
+    final minLeft = _buttonEdgeMargin;
+    final minTop = insets.top + _buttonEdgeMargin;
+    final travelWidth =
+        size.width - _buttonSize - _buttonEdgeMargin - minLeft;
+    final travelHeight =
+        size.height - _buttonSize - insets.bottom - _buttonEdgeMargin - minTop;
+    final left = minLeft + travelWidth.clamp(0.0, double.infinity) * offset.dx;
+    final top = minTop + travelHeight.clamp(0.0, double.infinity) * offset.dy;
 
     Widget button = Container(
       width: _buttonSize,
@@ -880,18 +994,23 @@ class CameraPageState extends State<CameraPage>
       );
 
       button = GestureDetector(
-        onHorizontalDragUpdate: (details) {
-          if (draggableWidth <= 0) return;
-          final currentOffset = _dragOffsetX ?? settingsManager.shutterOffsetX;
-          final delta = details.delta.dx / draggableWidth;
+        onPanUpdate: (details) {
+          if (travelWidth <= 0 && travelHeight <= 0) return;
+          final current =
+              _dragOffset ?? settingsManager.shutterOffsetFor(orientation);
+          final dx = travelWidth > 0 ? details.delta.dx / travelWidth : 0.0;
+          final dy = travelHeight > 0 ? details.delta.dy / travelHeight : 0.0;
           setState(() {
-            _dragOffsetX = (currentOffset + delta).clamp(0.0, 1.0);
+            _dragOffset = Offset(
+              (current.dx + dx).clamp(0.0, 1.0),
+              (current.dy + dy).clamp(0.0, 1.0),
+            );
           });
         },
-        onHorizontalDragEnd: (details) {
-          if (_dragOffsetX != null) {
-            settingsManager.setShutterOffsetX(_dragOffsetX!);
-            _dragOffsetX = null;
+        onPanEnd: (details) {
+          if (_dragOffset != null) {
+            settingsManager.setShutterOffset(orientation, _dragOffset!);
+            _dragOffset = null;
           }
         },
         child: button,
@@ -900,7 +1019,7 @@ class CameraPageState extends State<CameraPage>
       button = GestureDetector(onTap: _onShutterPressed, child: button);
     }
 
-    return Positioned(bottom: 50, left: left, child: button);
+    return Positioned(left: left, top: top, child: button);
   }
 
   Widget _buildSaveBar() {
@@ -962,7 +1081,7 @@ class CameraPageState extends State<CameraPage>
       await controller!.startImageStream((CameraImage image) async {
         if (!mounted) return;
 
-        DeviceOrientation orientation = _currentOrientation;
+        DeviceOrientation orientation = _currentOrientation.value;
 
         cacheManager.addImage(
           image,

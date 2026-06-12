@@ -54,7 +54,7 @@ CameraImage (YUV420)
 
 Follow minimal Material Design 3 best practices:
 
-- **8dp grid:** All spacing, padding, and margin values must be multiples of 8 (8, 16, 24, 32, …). Use 4dp only for tight internal spacing (e.g. icon-to-label gap within a single component).
+- **8dp grid:** All spacing, padding, and margin values must be multiples of 8. Use 4dp only for tight internal spacing (e.g. icon-to-label gap within a single component).
 - **Touch targets:** Minimum 48×48dp for all interactive elements.
 - **Typography:** Use Material `TextTheme` styles — never hard-code font sizes.
 - **Color:** Pull colors from `Theme.of(context).colorScheme` — never hard-code color values.
@@ -67,8 +67,11 @@ Follow minimal Material Design 3 best practices:
 ## AI Assistant Instructions
 
 - Avoid using jargon in your responses.
+- Don't offer to build and run the app and don't do it yourself.
+- - Use `fvm flutter` instead of the `flutter` command directly.
 
 ## Other
 
 - 'Watch' is deprecated and shouldn't be used. Use SignalBuilder instead for superior reactivity and consistent naming.
-- Use `fvm flutter` instead of the `flutter` command directly.
+- Use the new `spacing` parameter on `Row`/`Column` instead of `SizedBox` separators when spacing is even.
+- Prefer Dart's dot shorthand — e.g. `.all(8.0)` over `EdgeInsets.all(8.0)`.
