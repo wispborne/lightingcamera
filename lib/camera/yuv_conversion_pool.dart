@@ -101,9 +101,14 @@ class YuvConversionRequest {
   factory YuvConversionRequest.jpeg(ImageWithMetadata frame, JpegEncodeInfo info) =>
       _fromFrame(frame, kind: ConversionKind.jpeg, scale: 1, jpegInfo: info);
 
-  /// NV21 bytes for feeding the frame to ML Kit's labeler.
-  factory YuvConversionRequest.nv21(ImageWithMetadata frame) =>
-      _fromFrame(frame, kind: ConversionKind.nv21, scale: 1);
+  /// NV21 bytes for feeding the frame to ML Kit's labeler, downscaled like a
+  /// grid thumbnail — the labeler's model shrinks its input to ~224px anyway,
+  /// so packing at full resolution buys no accuracy.
+  factory YuvConversionRequest.nv21(ImageWithMetadata frame) => _fromFrame(
+        frame,
+        kind: ConversionKind.nv21,
+        scale: ImageConverter.thumbScaleFor(frame.image.width, frame.image.height),
+      );
 
   /// Builds a request from raw values directly. For tests only — production
   /// code uses the frame-based factories, which extract these from a
@@ -404,7 +409,8 @@ List<Object?> _processRequest(int id, YuvConversionRequest req) {
       final jpeg = encodeJpgWithInfo(image, req.jpegInfo!);
       return [id, jpeg, w, h, null];
     case ConversionKind.nv21:
-      return [id, _packYuv420ToNv21(req), req.width, req.height, null];
+      final (w, h) = nv21DimsFor(req);
+      return [id, packYuv420ToNv21(req), w, h, null];
   }
 }
 
@@ -431,12 +437,23 @@ Uint8List _convertRgba(YuvConversionRequest req) {
   return swap ? (outH, outW) : (outW, outH);
 }
 
+/// Output dimensions of an NV21 pack: the source size divided by the request's
+/// scale, rounded down to even so the half-resolution chroma plane lines up.
+@visibleForTesting
+(int, int) nv21DimsFor(YuvConversionRequest req) {
+  final scale = req.scale < 1 ? 1 : req.scale;
+  if (scale == 1) return (req.width, req.height);
+  return ((req.width ~/ scale) & ~1, (req.height ~/ scale) & ~1);
+}
+
 /// Packs 3-plane YUV420 into a single NV21 buffer: the Y plane (row padding
-/// stripped to width) followed by interleaved V/U chroma. Mirrors what ML Kit
-/// expects; ported from the lightning service so it runs off the UI thread.
-Uint8List _packYuv420ToNv21(YuvConversionRequest req) {
-  final width = req.width;
-  final height = req.height;
+/// stripped to width) followed by interleaved V/U chroma, downscaling by
+/// `req.scale` by stepping over source samples. Mirrors what ML Kit expects;
+/// ported from the lightning service so it runs off the UI thread.
+@visibleForTesting
+Uint8List packYuv420ToNv21(YuvConversionRequest req) {
+  final scale = req.scale < 1 ? 1 : req.scale;
+  final (width, height) = nv21DimsFor(req);
   final chromaWidth = (width + 1) ~/ 2;
   final chromaHeight = (height + 1) ~/ 2;
 
@@ -445,14 +462,22 @@ Uint8List _packYuv420ToNv21(YuvConversionRequest req) {
   final yBytes = req.yPlane;
   final yRowStride = req.yRowStride;
   int offset = 0;
-  if (yRowStride == width) {
+  if (scale == 1 && yRowStride == width) {
     nv21.setRange(0, width * height, yBytes);
     offset = width * height;
-  } else {
+  } else if (scale == 1) {
     for (int row = 0; row < height; row++) {
       final rowStart = row * yRowStride;
       nv21.setRange(offset, offset + width, yBytes, rowStart);
       offset += width;
+    }
+  } else {
+    for (int row = 0; row < height; row++) {
+      int src = row * scale * yRowStride;
+      for (int col = 0; col < width; col++) {
+        nv21[offset++] = yBytes[src];
+        src += scale;
+      }
     }
   }
 
@@ -460,13 +485,17 @@ Uint8List _packYuv420ToNv21(YuvConversionRequest req) {
   final vBytes = req.vPlane;
   final uvRowStride = req.uvRowStride;
   final uvPixelStride = req.uvPixelStride;
+  // Output chroma sample (row, col) covers output pixel (2col, 2row) → source
+  // pixel (2·col·scale, 2·row·scale) → source chroma sample (col·scale,
+  // row·scale), so the chroma grid steps by the same scale as luma.
+  final uvColStep = uvPixelStride * scale;
 
   for (int row = 0; row < chromaHeight; row++) {
-    int uvIndex = row * uvRowStride;
+    int uvIndex = row * scale * uvRowStride;
     for (int col = 0; col < chromaWidth; col++) {
       nv21[offset++] = vBytes[uvIndex];
       nv21[offset++] = uBytes[uvIndex];
-      uvIndex += uvPixelStride;
+      uvIndex += uvColStep;
     }
   }
 

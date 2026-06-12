@@ -13,6 +13,10 @@ import 'yuv_conversion_pool.dart';
 
 final lightningDetectionService = LightningDetectionService();
 
+/// One frame packed for the labeler: the [InputImage] (null if the frame
+/// couldn't be converted) and whether the pool cancelled the request.
+typedef _PreparedFrame = ({InputImage? image, bool cancelled});
+
 /// Runs Google ML Kit's on-device image labeler over a frozen capture buffer
 /// and reports, per frame, how confident it is that the frame shows lightning.
 ///
@@ -82,9 +86,11 @@ class LightningDetectionService {
     );
   }
 
-  /// Classify every frame in [frames] sequentially, recording each one's
-  /// lightning confidence as it completes. Safe to leave running — [reset]
-  /// cancels it.
+  /// Classify every frame in [frames], recording each one's lightning
+  /// confidence as it completes. NV21 packing is pipelined one frame ahead of
+  /// the labeler: while ML Kit processes frame N, frame N+1's bytes are
+  /// already being packed in the conversion pool, so neither stage waits on
+  /// the other. Safe to leave running — [reset] cancels it.
   Future<void> scan(List<ImageWithMetadata> frames) async {
     final gen = ++_generation;
     confidences.clear();
@@ -95,14 +101,22 @@ class LightningDetectionService {
 
     final labeler = _ensureLabeler();
 
-    for (final frame in frames) {
+    Future<_PreparedFrame>? pending;
+    for (int i = 0; i < frames.length; i++) {
       if (gen != _generation) break;
+      final frame = frames[i];
+      final prepared = await (pending ?? _prepare(frame));
+      if (gen != _generation) break;
+      // Kick off the next frame's packing before the (slow) labeler call so
+      // the two overlap. _prepare never throws, so abandoning this future on
+      // break/reset leaks no unhandled error.
+      pending = i + 1 < frames.length ? _prepare(frames[i + 1]) : null;
+      if (prepared.cancelled) break;
+
       double confidence = 0.0;
-      try {
-        final inputImage = await _toInputImage(frame);
-        if (gen != _generation) break;
-        if (inputImage != null) {
-          final labels = await labeler.processImage(inputImage);
+      if (prepared.image != null) {
+        try {
+          final labels = await labeler.processImage(prepared.image!);
           if (gen != _generation) break;
           for (final label in labels) {
             if (label.label.toLowerCase() == _lightningLabel) {
@@ -110,13 +124,11 @@ class LightningDetectionService {
               break;
             }
           }
+        } catch (e) {
+          Fimber.e(
+              'Lightning scan failed for frame ${frame.sequenceNumber}: $e',
+              ex: e);
         }
-      } on YuvCancelledException {
-        // The gallery is tearing down the pool — stop scanning.
-        break;
-      } catch (e) {
-        Fimber.e('Lightning scan failed for frame ${frame.sequenceNumber}: $e',
-            ex: e);
       }
       if (gen != _generation) break;
       confidences[frame.sequenceNumber] = confidence;
@@ -150,9 +162,29 @@ class LightningDetectionService {
     _labeler = null;
   }
 
-  /// Wraps a cached YUV420 frame as an ML Kit [InputImage] (NV21 bytes), or
-  /// `null` if the frame is not YUV420. The NV21 packing runs in the shared
-  /// conversion pool at low priority so it never delays gallery thumbnails.
+  /// Packs [frame] into an ML Kit [InputImage], swallowing failures:
+  /// `cancelled` means the pool dropped the request (the scan should stop), a
+  /// null image means the frame couldn't be converted (record no lightning
+  /// and move on). Never throws, so [scan] can safely fire-and-forget it one
+  /// frame ahead.
+  Future<_PreparedFrame> _prepare(ImageWithMetadata frame) async {
+    try {
+      return (image: await _toInputImage(frame), cancelled: false);
+    } on YuvCancelledException {
+      // The gallery is tearing down the pool — stop scanning.
+      return (image: null, cancelled: true);
+    } catch (e) {
+      Fimber.e('Lightning scan failed for frame ${frame.sequenceNumber}: $e',
+          ex: e);
+      return (image: null, cancelled: false);
+    }
+  }
+
+  /// Wraps a cached YUV420 frame as an ML Kit [InputImage] (NV21 bytes,
+  /// downscaled to thumbnail size — plenty for the labeler's ~224px model
+  /// input), or `null` if the frame is not YUV420. The NV21 packing runs in
+  /// the shared conversion pool at low priority so it never delays gallery
+  /// thumbnails.
   Future<InputImage?> _toInputImage(ImageWithMetadata frame) async {
     final image = frame.image;
     if (image.format.group != ImageFormatGroup.yuv420) return null;
@@ -164,10 +196,10 @@ class LightningDetectionService {
     return InputImage.fromBytes(
       bytes: packed.bytes,
       metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
+        size: Size(packed.width.toDouble(), packed.height.toDouble()),
         rotation: _rotationFor(frame.orientation, frame.lensDirection),
         format: InputImageFormat.nv21,
-        bytesPerRow: image.width,
+        bytesPerRow: packed.width,
       ),
     );
   }

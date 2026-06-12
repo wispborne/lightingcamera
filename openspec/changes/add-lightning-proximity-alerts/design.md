@@ -18,7 +18,9 @@ Why reuse `LightningService` rather than extract a shared relay client: the clas
 | Strike delivery to alert logic | New `Stream<Strike> get strikeStream` on `LightningService` (broadcast `StreamController`, fed wherever `_strikes.add` happens) | Avoids diffing the `ListSignal`; main app ignores it |
 | Subscription radius in the service | `alertRadiusKm + 20` km buffer | Smaller than the UI's 150 km box → less traffic; buffer keeps edge strikes from flapping in/out as the user moves between location fixes |
 | Cooldown | 5 min; same notification id updated silently during cooldown; bypass once if a strike is ≤ half the distance of the last alerted strike | Spec R4 |
-| Settings propagation to service isolate | Service invokes `settingsManager.init()` on start; main isolate sends `service.invoke('settingsChanged', {...})` on radius/key/URL change; service re-reads prefs and reconnects | Signals don't cross isolates; explicit poke is simple and reliable |
+| Settings propagation to service isolate | Service invokes `settingsManager.init()` on start; main isolate sends `service.invoke('settingsChanged', {...})` on radius/key/URL/unit change; service re-reads prefs and reconnects | Signals don't cross isolates; explicit poke is simple and reliable |
+| Distance display | All user-facing distances (radius slider, notification text) go through `formatDistanceKm(km, unitSystem)` from `lib/utils/units.dart` | The app already has a metric/imperial preference; hardcoding km would be inconsistent. The service isolate reads `unitSystem` from prefs the same way it reads the radius |
+| Radius bounds | Reuse `SettingsManager.minStrikeDistanceKm` (5) and `maxStrikeDistanceKm` (100) | Same range the existing "Overlay strike distance" slider uses; keeps one source of truth |
 | Permission flow | On toggle-on: request `POST_NOTIFICATIONS` (via `permission_handler`, already a dependency), verify location while-in-use already granted (camera overlay flow handles it), then start service | Deny → toggle reverts with a SnackBar |
 
 ## File Changes
@@ -30,13 +32,13 @@ Why reuse `LightningService` rather than extract a shared relay client: the clas
 | `lib/lightning/lightning_service.dart` | Add `strikeStream` (broadcast); no behavior change otherwise |
 | `lib/lightning/alert_service.dart` (new) | Service entrypoint (`@pragma('vm:entry-point')`): init prefs + notifications, get last known position, start a local `LightningService` in test or live mode, listen to `strikeStream`, distance/bearing math, cooldown state, notification posting, `settingsChanged`/`stop` handlers |
 | `lib/lightning/alert_service_controller.dart` (new) | Main-isolate side: configure `FlutterBackgroundService` (channels, boot start), `start()`/`stop()`, permission requests, `notifysettingsChanged()` |
-| `lib/settings/settings_manager.dart` | Add `lightningAlertsEnabled` (default false), `alertRadiusKm` (default 15.0, clamp 5–100) with signals + setters |
-| `lib/settings/settings_page.dart` | New "Alerts" section: toggle + radius slider (`Slider` with km label); toggle drives the controller; disabled state when no relay key and test mode off |
+| `lib/settings/settings_manager.dart` | Add `lightningAlertsEnabled` (default false), `alertRadiusKm` (default 15.0, clamped with the existing `minStrikeDistanceKm`/`maxStrikeDistanceKm` constants) with signals + setters |
+| `lib/settings/settings_page.dart` | New "Alerts" section: toggle + radius slider, label/trailing formatted via `formatDistanceKm(km, unitSystem)`; toggle drives the controller; disabled state when no relay key and test mode off. Mirrors the existing "Overlay strike distance" slider, with a label that distinguishes alert radius from that display filter |
 | `lib/main.dart` | On startup, if `lightningAlertsEnabled`, ensure service is configured/running (covers app-update and process-death cases); handle notification tap → already lands on `/` (camera) |
 
 ## Notification Content
 
-Distance via `latlong2`'s `Distance` (already used), bearing via its `bearing()`, mapped to 8 compass points. Body example: `Lightning 8 km away to the northwest`. Tap intent launches the app; no payload routing needed since camera is the home route.
+Distance via `latlong2`'s `Distance` (already used), formatted with `formatDistanceKm(km, settingsManager.unitSystem)` so it honors the user's metric/imperial choice; bearing via `Distance.bearing()`, mapped to 8 compass points. Body example: `Lightning 8 km away to the northwest` (or `5 mi away` for an imperial user). Tap intent launches the app; no payload routing needed since camera is the home route.
 
 ## Edge Cases
 

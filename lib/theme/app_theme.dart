@@ -49,7 +49,22 @@ ThemeData buildAppTheme() {
 
   final base = ThemeData(useMaterial3: true, colorScheme: scheme);
 
+  // Instant page transitions on every platform so navigating between camera,
+  // gallery, settings, map, and fullscreen images feels immediate — no slide
+  // or fade delay to wait through.
+  const instantTransitions = PageTransitionsTheme(
+    builders: {
+      TargetPlatform.android: _InstantPageTransitionsBuilder(),
+      TargetPlatform.iOS: _InstantPageTransitionsBuilder(),
+      TargetPlatform.fuchsia: _InstantPageTransitionsBuilder(),
+      TargetPlatform.linux: _InstantPageTransitionsBuilder(),
+      TargetPlatform.macOS: _InstantPageTransitionsBuilder(),
+      TargetPlatform.windows: _InstantPageTransitionsBuilder(),
+    },
+  );
+
   return base.copyWith(
+    pageTransitionsTheme: instantTransitions,
     scaffoldBackgroundColor: kSurfaceContainer,
     cardColor: kSurfaceContainer,
     dialogTheme: const DialogThemeData(backgroundColor: kSurfaceContainer),
@@ -68,6 +83,23 @@ ThemeData buildAppTheme() {
       overlayShape: RoundSliderOverlayShape(overlayRadius: 16),
     ),
   );
+}
+
+/// A page transition that shows the new page immediately with no slide or
+/// fade. Returning the child unwrapped makes route changes feel instant.
+class _InstantPageTransitionsBuilder extends PageTransitionsBuilder {
+  const _InstantPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    return child;
+  }
 }
 
 /// Lightens ([amount] > 0) or darkens ([amount] < 0) [color] by blending it

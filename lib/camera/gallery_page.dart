@@ -267,6 +267,7 @@ class _GalleryPageState extends State<GalleryPage> {
                                     final frame = hits[i];
                                     return _buildTile(
                                       indexBySeq[frame.sequenceNumber]!,
+                                      isHit: lightningDetectionService.isHit(frame.sequenceNumber),
                                       confidence: lightningDetectionService.confidenceFor(frame.sequenceNumber) ?? 0,
                                     );
                                   }, childCount: hits.length),
@@ -279,7 +280,10 @@ class _GalleryPageState extends State<GalleryPage> {
                               sliver: SliverGrid(
                                 gridDelegate: gridDelegate,
                                 delegate: SliverChildBuilderDelegate(
-                                  (context, i) => _buildTile(i),
+                                  (context, i) => _buildTile(
+                                    i,
+                                    isHit: lightningDetectionService.isHit(images[i].sequenceNumber),
+                                  ),
                                   childCount: images.length,
                                 ),
                               ),
@@ -741,7 +745,13 @@ class _GalleryPageState extends State<GalleryPage> {
   /// One gallery tile for the frame at [imageIndex] in [images]. Used by both
   /// the Lightning and All Photos sections. Pass [confidence] to show the
   /// detection badge in the corner (lightning section only).
-  Widget _buildTile(int imageIndex, {double? confidence}) {
+  ///
+  /// [isHit] is passed in rather than read from a per-tile `SignalBuilder`: the
+  /// grid's outer `SignalBuilder` already subscribes to the confidence map and
+  /// threshold (via `hitsByConfidence`), so it rebuilds every tile on any
+  /// change anyway. A second subscription per tile just re-hashed the whole
+  /// confidence map ~100× per scan tick for no benefit.
+  Widget _buildTile(int imageIndex, {required bool isHit, double? confidence}) {
     final thumbImage = _thumbs[imageIndex]?.image;
     final selected = _selected.contains(imageIndex);
 
@@ -773,59 +783,54 @@ class _GalleryPageState extends State<GalleryPage> {
           _toggleSelection(imageIndex);
         }
       },
-      child: SignalBuilder(
-        builder: (context) {
-          final isHit = lightningDetectionService.isHit(images[imageIndex].sequenceNumber);
-          return Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(4),
-              color: Colors.grey[900],
-              border: isHit ? Border.all(color: Colors.amber, width: 2) : null,
-            ),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                tileContent,
-                if (isHit) const Positioned(top: 4, left: 4, child: Icon(Icons.bolt, color: Colors.amber, size: 18)),
-                if (confidence != null)
-                  Positioned(
-                    left: 4,
-                    bottom: 4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
-                      child: Text(
-                        '${(confidence * 100).round()}%',
-                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                      ),
-                    ),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(4),
+          color: Colors.grey[900],
+          border: isHit ? Border.all(color: Colors.amber, width: 2) : null,
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            tileContent,
+            if (isHit) const Positioned(top: 4, left: 4, child: Icon(Icons.bolt, color: Colors.amber, size: 18)),
+            if (confidence != null)
+              Positioned(
+                left: 4,
+                bottom: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
+                  child: Text(
+                    '${(confidence * 100).round()}%',
+                    style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                   ),
-                if (_selectionMode && !selected)
-                  Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(4),
-                      color: Colors.black.withOpacity(0.4),
-                    ),
+                ),
+              ),
+            if (_selectionMode && !selected)
+              Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(4),
+                  color: Colors.black.withOpacity(0.4),
+                ),
+              ),
+            if (_selectionMode)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: Container(
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: selected ? Theme.of(context).colorScheme.primary : Colors.black54,
+                    border: Border.all(color: Colors.white, width: 2),
                   ),
-                if (_selectionMode)
-                  Positioned(
-                    top: 4,
-                    right: 4,
-                    child: Container(
-                      width: 24,
-                      height: 24,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: selected ? Theme.of(context).colorScheme.primary : Colors.black54,
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                      child: selected ? const Icon(Icons.check, color: Colors.white, size: 16) : null,
-                    ),
-                  ),
-              ],
-            ),
-          );
-        },
+                  child: selected ? const Icon(Icons.check, color: Colors.white, size: 16) : null,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

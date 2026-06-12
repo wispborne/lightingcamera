@@ -8,13 +8,16 @@ Notify the user when lightning strikes within a configurable distance of their l
 
 The feature MUST be off by default. Settings exposes:
 - **Lightning alerts** toggle.
-- **Alert radius** slider, 5–100 km, default 15 km, only enabled while the toggle is on.
+- **Alert radius** slider, 5–100 km (reusing `SettingsManager.minStrikeDistanceKm`/`maxStrikeDistanceKm`), default 15 km, only enabled while the toggle is on.
+
+The radius is stored internally in kilometres but MUST be displayed in the user's chosen unit system (`settingsManager.unitSystem`) via `formatDistanceKm`, matching how every other distance in the app is shown. This alert radius is a separate setting from the existing **Overlay strike distance** (which only filters what the camera overlay draws); the labels must make the distinction clear so the two aren't confused.
 
 Both persist across restarts (shared preferences, same pattern as other settings).
 
 #### Acceptance
 - Fresh install: alerts off, no service running, no notification permission requested.
 - Toggling on requests needed permissions; if the user denies notification permission, the toggle reverts to off with a brief explanation.
+- The radius slider label reads in miles for an imperial user and kilometres for a metric one.
 - Radius changes take effect without restarting the service or the app.
 
 ### R2: Background monitoring
@@ -33,7 +36,7 @@ While alerts are enabled, a foreground service MUST keep a relay connection aliv
 When a strike arrives whose distance to the user's last known location is within the alert radius, the device MUST show a notification.
 
 #### Acceptance
-- Notification states the distance (e.g. "Lightning 8 km away") and the strike's bearing as a compass direction (e.g. "to the northwest") when location is available.
+- Notification states the distance, formatted in the user's unit system via `formatDistanceKm` (e.g. "Lightning 8 km away" or "Lightning 5 mi away"), and the strike's bearing as a compass direction (e.g. "to the northwest") when location is available.
 - Tapping the notification opens the app on the camera page.
 - Strikes outside the radius produce no notification.
 - Works with lightning test mode: simulated strikes within the radius trigger notifications, allowing the feature to be verified without a storm.
