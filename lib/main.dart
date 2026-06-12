@@ -6,6 +6,7 @@ import 'package:lightingcamera/camera/gallery_page.dart';
 import 'package:lightingcamera/lightning/lightning_map_page.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
 import 'package:lightingcamera/settings/settings_page.dart';
+import 'package:lightingcamera/theme/app_theme.dart';
 import 'package:lightingcamera/utils/logging.dart';
 import 'package:signals/signals.dart';
 
@@ -68,12 +69,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'Lightning Camera',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          brightness: Brightness.dark,
-          seedColor: Colors.deepPurple,
-        ),
-      ),
+      theme: buildAppTheme(),
       routerConfig: _router,
     );
   }

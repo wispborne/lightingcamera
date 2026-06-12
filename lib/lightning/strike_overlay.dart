@@ -427,6 +427,8 @@ class StrikeOverlay extends StatelessWidget {
     return fraction.clamp(0.15, 1.0);
   }
 
+  // Hue encodes strike age (red = fresh → blue = old) and must stay legible
+  // over arbitrary camera frames, so it is intentionally not theme-colored.
   Color _colorForAge(DateTime time) {
     final age = DateTime.now().difference(time);
     final fraction =

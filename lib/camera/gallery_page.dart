@@ -1,7 +1,6 @@
 import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
-import 'package:drag_select_grid_view/drag_select_grid_view.dart';
 import 'package:flutter/material.dart';
 import 'package:gal/gal.dart';
 import 'package:go_router/go_router.dart';
@@ -28,14 +27,18 @@ class _GalleryPageState extends State<GalleryPage> {
   final Map<int, ProcessedImage> _displayImages = {};
   final Set<int> _currentlyConverting = {};
   final int _batchSize = 3;
-  final _gridController = DragSelectGridViewController();
   int _generation = 0;
+
+  // Multi-select state. Indexes here point into [images]. Long-press a tile to
+  // enter selection mode; tapping then toggles. Replaces the old drag-select
+  // grid, which couldn't be split into labelled sections.
+  final Set<int> _selected = {};
+  bool _selectionMode = false;
 
   static const int _minCrossAxisCount = 2;
   static const int _maxCrossAxisCount = 8;
   static const int _portraitDefault = 3;
   static const int _landscapeDefault = 6;
-  int? _userCrossAxisCount;
   final Map<int, Offset> _pointers = {};
   double? _initialPinchDistance;
 
@@ -52,14 +55,11 @@ class _GalleryPageState extends State<GalleryPage> {
   bool _volumeDialogOpen = false;
   bool _volumeExiting = false;
 
-  bool get _isSelecting => _gridController.value.isSelecting;
-
-  Set<int> get _selectedIndexes => _gridController.value.selectedIndexes;
+  bool get _isSelecting => _selectionMode;
 
   @override
   void initState() {
     super.initState();
-    _gridController.addListener(_onSelectionChanged);
     images = imageCacheManager.getTimestampedImages();
     volumeKeyDispatcher.subscribe(_handleVolumeKey);
 
@@ -68,8 +68,6 @@ class _GalleryPageState extends State<GalleryPage> {
       lightningDetectionService.scan(images);
     });
   }
-
-  void _onSelectionChanged() => setState(() {});
 
   double _currentPinchDistance() {
     final points = _pointers.values.toList();
@@ -136,7 +134,7 @@ class _GalleryPageState extends State<GalleryPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_isSelecting ? '${_selectedIndexes.length} selected' : 'Gallery (${images.length} images)'),
+          title: Text(_isSelecting ? '${_selected.length} selected' : 'Gallery (${images.length} images)'),
           leading: IconButton(
             icon: Icon(_isSelecting ? Icons.close : Icons.arrow_back),
             onPressed: _isSelecting ? _exitSelectionMode : _handleExit,
@@ -146,12 +144,12 @@ class _GalleryPageState extends State<GalleryPage> {
                   IconButton(
                     icon: const Icon(Icons.check_circle_outline),
                     tooltip: 'Keep selected',
-                    onPressed: _selectedIndexes.isNotEmpty ? _keepSelected : null,
+                    onPressed: _selected.isNotEmpty ? _keepSelected : null,
                   ),
                   IconButton(
                     icon: const Icon(Icons.delete_outline),
                     tooltip: 'Delete selected',
-                    onPressed: _selectedIndexes.isNotEmpty ? _deleteSelected : null,
+                    onPressed: _selected.isNotEmpty ? _deleteSelected : null,
                   ),
                 ]
               : [
@@ -175,10 +173,7 @@ class _GalleryPageState extends State<GalleryPage> {
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           )
                         : const Icon(Icons.more_vert),
                     tooltip: 'More',
@@ -190,18 +185,14 @@ class _GalleryPageState extends State<GalleryPage> {
                       PopupMenuItem<String>(
                         value: 'save_all',
                         enabled: images.isNotEmpty && !_isSaving,
-                        child: const Row(
-                          children: [
-                            Icon(Icons.save_alt),
-                            SizedBox(width: 12),
-                            Text('Save all'),
-                          ],
-                        ),
+                        child: const Row(children: [Icon(Icons.save_alt), SizedBox(width: 12), Text('Save all')]),
                       ),
                     ],
                   ),
                 ],
-          backgroundColor: _isSelecting ? Colors.deepPurple.shade900 : Colors.black87,
+          // Black-tinted bars keep the gallery reading as a photo viewer; the
+          // selecting state picks up the theme accent instead of the old seed.
+          backgroundColor: _isSelecting ? Theme.of(context).colorScheme.primaryContainer : Colors.black87,
           foregroundColor: Colors.white,
           bottom: _isSelecting ? null : _buildAppBarBottom(),
         ),
@@ -210,164 +201,118 @@ class _GalleryPageState extends State<GalleryPage> {
             ? const Center(
                 child: Text('No images to display', style: TextStyle(color: Colors.white)),
               )
-            : Column(
-                children: [
-                  _buildLightningSection(),
-                  Expanded(
-                    child: OrientationBuilder(
-                      builder: (context, orientation) {
-                        final crossAxisCount =
-                            (_userCrossAxisCount ??
-                                    (orientation == Orientation.landscape ? _landscapeDefault : _portraitDefault))
-                                .clamp(_minCrossAxisCount, _maxCrossAxisCount);
+            : OrientationBuilder(
+                builder: (context, orientation) {
+                  final crossAxisCount =
+                      (settingsManager.galleryCrossAxisCount ??
+                              (orientation == Orientation.landscape ? _landscapeDefault : _portraitDefault))
+                          .clamp(_minCrossAxisCount, _maxCrossAxisCount);
 
-                        return Listener(
-                          onPointerDown: (e) {
-                            _pointers[e.pointer] = e.localPosition;
-                            if (_pointers.length == 2) {
-                              _initialPinchDistance = _currentPinchDistance();
-                            }
-                          },
-                          onPointerMove: (e) {
-                            _pointers[e.pointer] = e.localPosition;
-                            if (_pointers.length == 2 && _initialPinchDistance != null) {
-                              final dist = _currentPinchDistance();
-                              final ratio = dist / _initialPinchDistance!;
-                              if (ratio > 1.5 && crossAxisCount > _minCrossAxisCount) {
-                                setState(() {
-                                  _userCrossAxisCount = crossAxisCount - 1;
-                                });
-                                _initialPinchDistance = dist;
-                              } else if (ratio < 0.65 && crossAxisCount < _maxCrossAxisCount) {
-                                setState(() {
-                                  _userCrossAxisCount = crossAxisCount + 1;
-                                });
-                                _initialPinchDistance = dist;
-                              }
-                            }
-                          },
-                          onPointerUp: (e) {
-                            _pointers.remove(e.pointer);
-                            if (_pointers.length < 2) {
-                              _initialPinchDistance = null;
-                            }
-                          },
-                          onPointerCancel: (e) {
-                            _pointers.remove(e.pointer);
-                            if (_pointers.length < 2) {
-                              _initialPinchDistance = null;
-                            }
-                          },
-                          child: DragSelectGridView(
-                            gridController: _gridController,
-                            padding: const EdgeInsets.all(2),
-                            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: crossAxisCount,
-                              mainAxisSpacing: 2,
-                              crossAxisSpacing: 2,
-                              childAspectRatio: 1,
-                            ),
-                            itemCount: images.length,
-                            triggerSelectionOnTap: false,
-                            impliesAppBarDismissal: false,
-                            itemBuilder: (context, index, selected) {
-                              if (index >= _displayImages.length + _currentlyConverting.length) {
-                                _convertImageBatch(index, _batchSize);
-                              }
+                  return Listener(
+                    onPointerDown: (e) {
+                      _pointers[e.pointer] = e.localPosition;
+                      if (_pointers.length == 2) {
+                        _initialPinchDistance = _currentPinchDistance();
+                      }
+                    },
+                    onPointerMove: (e) {
+                      _pointers[e.pointer] = e.localPosition;
+                      if (_pointers.length == 2 && _initialPinchDistance != null) {
+                        final dist = _currentPinchDistance();
+                        final ratio = dist / _initialPinchDistance!;
+                        if (ratio > 1.5 && crossAxisCount > _minCrossAxisCount) {
+                          settingsManager.setGalleryCrossAxisCount(crossAxisCount - 1);
+                          setState(() {});
+                          _initialPinchDistance = dist;
+                        } else if (ratio < 0.65 && crossAxisCount < _maxCrossAxisCount) {
+                          settingsManager.setGalleryCrossAxisCount(crossAxisCount + 1);
+                          setState(() {});
+                          _initialPinchDistance = dist;
+                        }
+                      }
+                    },
+                    onPointerUp: (e) {
+                      _pointers.remove(e.pointer);
+                      if (_pointers.length < 2) {
+                        _initialPinchDistance = null;
+                      }
+                    },
+                    onPointerCancel: (e) {
+                      _pointers.remove(e.pointer);
+                      if (_pointers.length < 2) {
+                        _initialPinchDistance = null;
+                      }
+                    },
+                    child: SignalBuilder(
+                      builder: (context) {
+                        // Two labelled sections in one gallery: the lightning
+                        // hits pulled to the top (most confident first) for quick
+                        // access, then every photo under "All Photos" — the hits
+                        // stay in that full list too, highlighted, so nothing is
+                        // hidden away.
+                        final hits = lightningDetectionService.hitsByConfidence(images);
+                        final indexBySeq = {for (int i = 0; i < images.length; i++) images[i].sequenceNumber: i};
+                        final gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: crossAxisCount,
+                          mainAxisSpacing: 2,
+                          crossAxisSpacing: 2,
+                          childAspectRatio: 1,
+                        );
 
-                              final displayImage = _displayImages[index];
-                              final isConverting = _currentlyConverting.contains(index);
-
-                              Widget tileContent;
-                              if (displayImage != null) {
-                                tileContent = ClipRRect(
-                                  borderRadius: BorderRadius.circular(4),
-                                  child: FutureBuilder<ui.Image>(
-                                    future: displayImage.displayImage,
-                                    builder: (context, asyncSnapshot) => !asyncSnapshot.hasData
-                                        ? const Center(child: CircularProgressIndicator())
-                                        : RawImage(image: asyncSnapshot.requireData, fit: BoxFit.cover),
-                                  ),
-                                );
-                              } else if (isConverting) {
-                                tileContent = const Center(
-                                  child: SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                  ),
-                                );
-                              } else {
-                                tileContent = const Center(child: Icon(Icons.image, color: Colors.white54, size: 30));
-                              }
-
-                              return GestureDetector(
-                                onTap: (!_isSelecting && displayImage != null)
-                                    ? () => _showFullscreenImage(context, displayImage, index)
-                                    : null,
-                                child: SignalBuilder(
-                                  builder: (context) {
-                                    final isHit = lightningDetectionService.isHit(images[index].sequenceNumber);
-                                    return Container(
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(4),
-                                        color: Colors.grey[900],
-                                        border: isHit ? Border.all(color: Colors.amber, width: 2) : null,
-                                      ),
-                                      child: Stack(
-                                        fit: StackFit.expand,
-                                        children: [
-                                          tileContent,
-                                          if (isHit)
-                                            const Positioned(
-                                              top: 4,
-                                              left: 4,
-                                              child: Icon(Icons.bolt, color: Colors.amber, size: 18),
-                                            ),
-                                          if (_isSelecting && !selected)
-                                            Container(
-                                              decoration: BoxDecoration(
-                                                borderRadius: BorderRadius.circular(4),
-                                                color: Colors.black.withOpacity(0.4),
-                                              ),
-                                            ),
-                                          if (_isSelecting)
-                                            Positioned(
-                                              top: 4,
-                                              right: 4,
-                                              child: Container(
-                                                width: 24,
-                                                height: 24,
-                                                decoration: BoxDecoration(
-                                                  shape: BoxShape.circle,
-                                                  color: selected ? Colors.deepPurple : Colors.black54,
-                                                  border: Border.all(color: Colors.white, width: 2),
-                                                ),
-                                                child: selected
-                                                    ? const Icon(Icons.check, color: Colors.white, size: 16)
-                                                    : null,
-                                              ),
-                                            ),
-                                        ],
-                                      ),
+                        return CustomScrollView(
+                          slivers: [
+                            if (hits.isNotEmpty) ...[
+                              SliverToBoxAdapter(child: _sectionHeader('Lightning', hits.length, lightning: true)),
+                              SliverPadding(
+                                padding: const EdgeInsets.all(2),
+                                sliver: SliverGrid(
+                                  gridDelegate: gridDelegate,
+                                  delegate: SliverChildBuilderDelegate((context, i) {
+                                    final frame = hits[i];
+                                    return _buildTile(
+                                      indexBySeq[frame.sequenceNumber]!,
+                                      confidence: lightningDetectionService.confidenceFor(frame.sequenceNumber) ?? 0,
                                     );
-                                  },
+                                  }, childCount: hits.length),
                                 ),
-                              );
-                            },
-                          ),
+                              ),
+                            ],
+                            SliverToBoxAdapter(child: _sectionHeader('All Photos', images.length)),
+                            SliverPadding(
+                              padding: const EdgeInsets.all(2),
+                              sliver: SliverGrid(
+                                gridDelegate: gridDelegate,
+                                delegate: SliverChildBuilderDelegate(
+                                  (context, i) => _buildTile(i),
+                                  childCount: images.length,
+                                ),
+                              ),
+                            ),
+                          ],
                         );
                       },
                     ),
-                  ),
-                ],
+                  );
+                },
               ),
       ),
     );
   }
 
   void _exitSelectionMode() {
-    _gridController.clear();
+    setState(() {
+      _selected.clear();
+      _selectionMode = false;
+    });
+  }
+
+  /// Toggle one tile's selection. Leaving the last selection drops out of
+  /// selection mode so the app bar returns to its normal actions.
+  void _toggleSelection(int index) {
+    setState(() {
+      if (!_selected.remove(index)) _selected.add(index);
+      if (_selected.isEmpty) _selectionMode = false;
+    });
   }
 
   void _deleteSelected() {
@@ -377,7 +322,7 @@ class _GalleryPageState extends State<GalleryPage> {
         return AlertDialog(
           title: const Text('Delete selected?'),
           content: Text(
-            'Delete ${_selectedIndexes.length} image${_selectedIndexes.length == 1 ? '' : 's'}? '
+            'Delete ${_selected.length} image${_selected.length == 1 ? '' : 's'}? '
             'This cannot be undone.',
           ),
           actions: [
@@ -385,7 +330,7 @@ class _GalleryPageState extends State<GalleryPage> {
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                _applyDeletion(Set<int>.from(_selectedIndexes));
+                _applyDeletion(Set<int>.from(_selected));
               },
               child: const Text('Delete'),
             ),
@@ -396,14 +341,14 @@ class _GalleryPageState extends State<GalleryPage> {
   }
 
   void _keepSelected() {
-    final toRemoveCount = images.length - _selectedIndexes.length;
+    final toRemoveCount = images.length - _selected.length;
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
           title: const Text('Keep selected?'),
           content: Text(
-            'Keep ${_selectedIndexes.length} image${_selectedIndexes.length == 1 ? '' : 's'} '
+            'Keep ${_selected.length} image${_selected.length == 1 ? '' : 's'} '
             'and delete the remaining $toRemoveCount?',
           ),
           actions: [
@@ -412,7 +357,7 @@ class _GalleryPageState extends State<GalleryPage> {
               onPressed: () {
                 Navigator.of(context).pop();
                 final allIndices = List.generate(images.length, (i) => i).toSet();
-                _applyDeletion(allIndices.difference(_selectedIndexes));
+                _applyDeletion(allIndices.difference(_selected));
               },
               child: const Text('Keep'),
             ),
@@ -444,13 +389,14 @@ class _GalleryPageState extends State<GalleryPage> {
     }
 
     _generation++;
-    _gridController.clear();
 
     setState(() {
       images = newImages;
       _displayImages.clear();
       _displayImages.addAll(newDisplayImages);
       _currentlyConverting.clear();
+      _selected.clear();
+      _selectionMode = false;
     });
 
     if (images.isNotEmpty) {
@@ -773,107 +719,122 @@ class _GalleryPageState extends State<GalleryPage> {
     );
   }
 
-  /// The "Lightning" section above the grid: a horizontal strip of the detected
-  /// frames, most confident first. Renders nothing when there are no hits.
-  Widget _buildLightningSection() {
-    return SignalBuilder(
-      builder: (context) {
-        final hits = lightningDetectionService.hitsByConfidence(images);
-        if (hits.isEmpty) return const SizedBox.shrink();
-        return Container(
-          width: double.infinity,
-          color: Colors.black,
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.bolt, color: Colors.amber, size: 18),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Lightning (${hits.length})',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.white),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 88,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: hits.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 8),
-                  itemBuilder: (context, i) {
-                    final frame = hits[i];
-                    final gridIndex = images.indexOf(frame);
-                    final confidence = lightningDetectionService.confidenceFor(frame.sequenceNumber) ?? 0;
-                    final processed = gridIndex >= 0 ? _displayImages[gridIndex] : null;
-                    if (processed == null && gridIndex >= 0) {
-                      _convertImageBatch(gridIndex, 1);
-                    }
-                    return _buildLightningThumb(processed, gridIndex, confidence);
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+  /// A group label above one of the gallery sections, e.g. "Lightning (3)" or
+  /// "All Photos (42)". The lightning label carries the amber bolt.
+  Widget _sectionHeader(String label, int count, {bool lightning = false}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+      child: Row(
+        children: [
+          if (lightning) ...[const Icon(Icons.bolt, color: Colors.amber, size: 18), const SizedBox(width: 4)],
+          Text('$label ($count)', style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.white)),
+        ],
+      ),
     );
   }
 
-  Widget _buildLightningThumb(ProcessedImage? processed, int gridIndex, double confidence) {
-    return GestureDetector(
-      onTap: (processed != null && gridIndex >= 0) ? () => _showFullscreenImage(context, processed, gridIndex) : null,
-      child: ClipRRect(
+  /// One gallery tile for the frame at [imageIndex] in [images]. Used by both
+  /// the Lightning and All Photos sections. Pass [confidence] to show the
+  /// detection badge in the corner (lightning section only).
+  Widget _buildTile(int imageIndex, {double? confidence}) {
+    if (_displayImages[imageIndex] == null && !_currentlyConverting.contains(imageIndex)) {
+      _convertImageBatch(imageIndex, _batchSize);
+    }
+
+    final displayImage = _displayImages[imageIndex];
+    final isConverting = _currentlyConverting.contains(imageIndex);
+    final selected = _selected.contains(imageIndex);
+
+    Widget tileContent;
+    if (displayImage != null) {
+      tileContent = ClipRRect(
         borderRadius: BorderRadius.circular(4),
-        child: SizedBox(
-          width: 88,
-          height: 88,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              if (processed != null)
-                FutureBuilder<ui.Image>(
-                  future: processed.displayImage,
-                  builder: (context, snapshot) => !snapshot.hasData
-                      ? Container(color: Colors.grey[900])
-                      : RawImage(image: snapshot.requireData, fit: BoxFit.cover),
-                )
-              else
-                Container(
-                  color: Colors.grey[900],
-                  child: const Center(
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    ),
-                  ),
-                ),
-              Positioned(
-                left: 2,
-                top: 2,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.bolt, color: Colors.amber, size: 12),
-                      Text(
+        child: FutureBuilder<ui.Image>(
+          future: displayImage.displayImage,
+          builder: (context, asyncSnapshot) => !asyncSnapshot.hasData
+              ? const Center(child: CircularProgressIndicator())
+              : RawImage(image: asyncSnapshot.requireData, fit: BoxFit.cover),
+        ),
+      );
+    } else if (isConverting) {
+      tileContent = const Center(
+        child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+      );
+    } else {
+      tileContent = const Center(child: Icon(Icons.image, color: Colors.white54, size: 30));
+    }
+
+    return GestureDetector(
+      onTap: () {
+        if (_selectionMode) {
+          _toggleSelection(imageIndex);
+        } else if (displayImage != null) {
+          _showFullscreenImage(context, displayImage, imageIndex);
+        }
+      },
+      onLongPress: () {
+        if (!_selectionMode) {
+          setState(() {
+            _selectionMode = true;
+            _selected.add(imageIndex);
+          });
+        } else {
+          _toggleSelection(imageIndex);
+        }
+      },
+      child: SignalBuilder(
+        builder: (context) {
+          final isHit = lightningDetectionService.isHit(images[imageIndex].sequenceNumber);
+          return Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(4),
+              color: Colors.grey[900],
+              border: isHit ? Border.all(color: Colors.amber, width: 2) : null,
+            ),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                tileContent,
+                if (isHit) const Positioned(top: 4, left: 4, child: Icon(Icons.bolt, color: Colors.amber, size: 18)),
+                if (confidence != null)
+                  Positioned(
+                    left: 4,
+                    bottom: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
+                      child: Text(
                         '${(confidence * 100).round()}%',
                         style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
-            ],
-          ),
-        ),
+                if (_selectionMode && !selected)
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(4),
+                      color: Colors.black.withOpacity(0.4),
+                    ),
+                  ),
+                if (_selectionMode)
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: Container(
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: selected ? Theme.of(context).colorScheme.primary : Colors.black54,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: selected ? const Icon(Icons.check, color: Colors.white, size: 16) : null,
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -996,8 +957,6 @@ class _GalleryPageState extends State<GalleryPage> {
   void dispose() {
     volumeKeyDispatcher.unsubscribe(_handleVolumeKey);
     lightningDetectionService.reset();
-    _gridController.removeListener(_onSelectionChanged);
-    _gridController.dispose();
     for (final image in _displayImages.values) {
       image.dispose();
     }

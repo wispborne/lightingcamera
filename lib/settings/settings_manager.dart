@@ -42,6 +42,7 @@ class SettingsManager {
   static const _maxStrikeDistanceKmKey = 'max_strike_distance_km';
   static const _lightningThresholdKey = 'lightning_confidence_threshold';
   static const _geotagPhotosKey = 'geotag_photos';
+  static const _galleryCrossAxisCountKey = 'gallery_cross_axis_count';
 
   /// Bounds for the overlay's maximum strike distance, in kilometres.
   static const double minStrikeDistanceKm = 5;
@@ -208,6 +209,13 @@ class SettingsManager {
   ReadonlySignal<bool> get geotagPhotosSignal => _geotagPhotos;
   bool get geotagPhotos => _geotagPhotos.value;
 
+  /// How many columns the gallery grid shows, set by pinching to zoom. Null
+  /// means follow the per-orientation default (more columns in landscape). Once
+  /// the user pinches, the chosen count is remembered across restarts.
+  late final Signal<int?> _galleryCrossAxisCount;
+  ReadonlySignal<int?> get galleryCrossAxisCountSignal => _galleryCrossAxisCount;
+  int? get galleryCrossAxisCount => _galleryCrossAxisCount.value;
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     // Per-orientation shutter positions. The X for each orientation falls back
@@ -277,6 +285,7 @@ class SettingsManager {
       storedThreshold.clamp(minLightningThreshold, maxLightningThreshold),
     );
     _geotagPhotos = signal(prefs.getBool(_geotagPhotosKey) ?? true);
+    _galleryCrossAxisCount = signal(prefs.getInt(_galleryCrossAxisCountKey));
   }
 
   Future<void> setShutterOffset(
@@ -429,6 +438,12 @@ class SettingsManager {
     _geotagPhotos.value = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_geotagPhotosKey, enabled);
+  }
+
+  Future<void> setGalleryCrossAxisCount(int count) async {
+    _galleryCrossAxisCount.value = count;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_galleryCrossAxisCountKey, count);
   }
 
   void enterRepositionMode() {

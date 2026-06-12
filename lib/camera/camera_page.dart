@@ -489,6 +489,10 @@ class CameraPageState extends State<CameraPage>
       _setExposureCompensation(snapped);
     }
 
+    // Controls in this page float over the live camera preview, so they use
+    // white-on-black-scrim rather than theme colors — cyan-on-navy chrome would
+    // wash out over arbitrary, bright camera frames. These stay hard-coded by
+    // design for legibility, not as a theme oversight.
     return Container(
       height: 180,
       width: 50,
