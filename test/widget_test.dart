@@ -1,30 +1,35 @@
-// This is a basic Flutter widget test.
+// Smoke test: boot the real app and confirm the camera route renders.
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// There's no physical camera in the test harness, so the camera page can't
+// finish initializing — it sits on its loading spinner. That's enough to prove
+// the app starts up, the router resolves the home route, and CameraPage builds
+// without throwing.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:lightingcamera/main.dart';
+import 'package:lightingcamera/settings/settings_manager.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  testWidgets('app boots to the camera route', (WidgetTester tester) async {
+    // The camera page reads persisted settings as it starts, so back them with
+    // an empty in-memory store and initialize the manager before pumping.
+    SharedPreferences.setMockInitialValues({});
+    await settingsManager.init();
+
     await tester.pumpWidget(const MyApp());
-
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // The app booted into MyApp's router and the camera page is showing its
+    // loading state (no real camera to open in the test harness).
+    expect(find.byType(MaterialApp), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    // Tear the camera page down and flush its 1-second FPS tick so the test
+    // doesn't finish with a pending timer.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 1));
   });
 }

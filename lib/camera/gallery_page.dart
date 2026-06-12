@@ -1,5 +1,3 @@
-import 'dart:ui' as ui;
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:gal/gal.dart';
@@ -14,6 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:signals/signals_flutter.dart';
 
 import 'image_cache_manager.dart';
+import 'yuv_conversion_pool.dart';
 
 class GalleryPage extends StatefulWidget {
   const GalleryPage({super.key});
@@ -24,9 +23,12 @@ class GalleryPage extends StatefulWidget {
 
 class _GalleryPageState extends State<GalleryPage> {
   List<ImageWithMetadata> images = [];
-  final Map<int, ProcessedImage> _displayImages = {};
-  final Set<int> _currentlyConverting = {};
-  final int _batchSize = 3;
+  // Reduced-resolution grid thumbnails, keyed by index into [images]. Generated
+  // eagerly in the background when the gallery opens (see [_generateThumbnails])
+  // so scrolling never waits on a conversion.
+  final Map<int, ProcessedFrame> _thumbs = {};
+  // Bumped whenever [images] is reindexed (deletion) or the page is torn down,
+  // so background results that resolve against a stale layout are discarded.
   int _generation = 0;
 
   // Multi-select state. Indexes here point into [images]. Long-press a tile to
@@ -64,7 +66,7 @@ class _GalleryPageState extends State<GalleryPage> {
     volumeKeyDispatcher.subscribe(_handleVolumeKey);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _convertImageBatch(0, _batchSize);
+      _generateThumbnails();
       lightningDetectionService.scan(images);
     });
   }
@@ -74,53 +76,46 @@ class _GalleryPageState extends State<GalleryPage> {
     return (points[0] - points[1]).distance;
   }
 
-  Future<void> _convertImageBatch(int start, int count) async {
-    final end = (start + count).clamp(0, images.length);
-
-    for (int i = start; i < end; i++) {
-      if (_displayImages.containsKey(i) || _currentlyConverting.contains(i)) {
-        continue;
-      }
-
-      _currentlyConverting.add(i);
-      _convertSingleImage(i);
-    }
-  }
-
-  Future<void> _convertSingleImage(int index) async {
+  /// Queue every not-yet-converted frame for a background thumbnail. Tiles fill
+  /// in progressively as the workers finish, in grid order.
+  void _generateThumbnails() {
     final gen = _generation;
-    try {
-      final timestampedImage = images[index];
-      final displayImage = await _convertCameraImageToUIImage(timestampedImage);
-
-      if (mounted && displayImage != null && _generation == gen) {
-        setState(() {
-          _displayImages[index] = displayImage;
-          _currentlyConverting.remove(index);
-        });
-      }
-    } catch (e) {
-      Fimber.e('Error converting image $index: $e', ex: e);
-      if (mounted && _generation == gen) {
-        _currentlyConverting.remove(index);
-      }
+    for (int i = 0; i < images.length; i++) {
+      if (!_thumbs.containsKey(i)) _generateThumbnail(i, gen);
     }
   }
 
-  Future<ProcessedImage?> _convertCameraImageToUIImage(ImageWithMetadata cameraImage) async {
+  Future<void> _generateThumbnail(int index, int gen) async {
+    if (index < 0 || index >= images.length) return;
+    final frame = images[index];
+    if (frame.image.format.group != ImageFormatGroup.yuv420) return;
     try {
-      if (cameraImage.image.format.group == ImageFormatGroup.yuv420) {
-        return ImageConverter.processImage(cameraImage);
+      final result = await yuvConversionPool.convert(
+        YuvConversionRequest.thumbnail(frame),
+        priority: ConversionPriority.normal,
+      );
+      if (!mounted || gen != _generation) return;
+      final processed = ProcessedFrame(result.bytes, result.width, result.height);
+      // Decode to a texture now so the tile paints the instant it appears, then
+      // drop the CPU-side bytes to keep a full buffer of thumbnails cheap.
+      await processed.uiImage;
+      processed.releaseBytes();
+      if (!mounted || gen != _generation) {
+        processed.dispose();
+        return;
       }
-      return null;
+      setState(() => _thumbs[index] = processed);
+    } on YuvCancelledException {
+      // Superseded by a deletion re-queue or the page closing — ignore.
     } catch (e) {
-      Fimber.e('Error in _convertCameraImageToUIImage: $e', ex: e);
-      return null;
+      Fimber.e('Thumbnail conversion failed for $index: $e', ex: e);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Landscape screen height is scarce, so the app bar is made denser there.
+    final isLandscape = MediaQuery.orientationOf(context) == Orientation.landscape;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (bool didPop, dynamic result) {
@@ -134,7 +129,8 @@ class _GalleryPageState extends State<GalleryPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_isSelecting ? '${_selected.length} selected' : 'Gallery (${images.length} images)'),
+          toolbarHeight: isLandscape ? 40 : null,
+          // title: Text(_isSelecting ? '${_selected.length} selected' : 'Gallery (${images.length} images)'),
           leading: IconButton(
             icon: Icon(_isSelecting ? Icons.close : Icons.arrow_back),
             onPressed: _isSelecting ? _exitSelectionMode : _handleExit,
@@ -373,34 +369,35 @@ class _GalleryPageState extends State<GalleryPage> {
     imageCacheManager.removeAtIndices(indicesToRemove);
 
     final newImages = <ImageWithMetadata>[];
-    final newDisplayImages = <int, ProcessedImage>{};
+    final newThumbs = <int, ProcessedFrame>{};
     int newIndex = 0;
 
     for (int oldIndex = 0; oldIndex < images.length; oldIndex++) {
       if (!indicesToRemove.contains(oldIndex)) {
         newImages.add(images[oldIndex]);
-        if (_displayImages.containsKey(oldIndex)) {
-          newDisplayImages[newIndex] = _displayImages[oldIndex]!;
-        }
+        final thumb = _thumbs[oldIndex];
+        if (thumb != null) newThumbs[newIndex] = thumb;
         newIndex++;
       } else {
-        _displayImages[oldIndex]?.dispose();
+        _thumbs[oldIndex]?.dispose();
       }
     }
 
+    // New layout: discard any in-flight results from the old indexing, then drop
+    // queued thumbnail work so we can re-queue only what the survivors still need.
     _generation++;
+    yuvConversionPool.cancelPending();
 
     setState(() {
       images = newImages;
-      _displayImages.clear();
-      _displayImages.addAll(newDisplayImages);
-      _currentlyConverting.clear();
+      _thumbs.clear();
+      _thumbs.addAll(newThumbs);
       _selected.clear();
       _selectionMode = false;
     });
 
     if (images.isNotEmpty) {
-      _convertImageBatch(0, _batchSize);
+      _generateThumbnails();
     }
   }
 
@@ -458,51 +455,59 @@ class _GalleryPageState extends State<GalleryPage> {
     return false;
   }
 
-  /// Encode and save [toSave] to the device gallery, returning how many
-  /// succeeded and failed. Assumes permission has already been granted.
+  /// Encode and save [toSave] to the device gallery at full resolution,
+  /// returning how many succeeded and failed. Conversion and JPEG encoding run
+  /// in the background pool (a few in flight at once) so the gallery stays
+  /// responsive. Assumes permission has already been granted.
   Future<(int saved, int failed)> _saveImages(List<ImageWithMetadata> toSave) async {
     // Resolve the location and camera details once, then stamp every frame with
     // them — the whole burst was shot from one spot within a few seconds.
     final position = settingsManager.geotagPhotos ? await resolvePhotoLocation() : null;
     final device = await loadDeviceCameraInfo();
 
-    // Reuse already-converted frames, keyed by sequence number so a filtered
-    // subset (e.g. just the lightning hits) still lines up with the cache.
-    final converted = <int, ProcessedImage>{};
-    for (final entry in _displayImages.entries) {
-      if (entry.key < images.length) {
-        converted[images[entry.key].sequenceNumber] = entry.value;
+    Future<bool> saveOne(ImageWithMetadata frame) async {
+      try {
+        if (frame.image.format.group != ImageFormatGroup.yuv420) return false;
+        final info = JpegEncodeInfo(
+          timestamp: frame.timestamp,
+          latitude: position?.latitude,
+          longitude: position?.longitude,
+          altitude: position?.altitude,
+          heading: position?.heading,
+          gpsTimestamp: position?.timestamp,
+          make: device?.make,
+          model: device?.model,
+        );
+        final result = await yuvConversionPool.convert(
+          YuvConversionRequest.jpeg(frame, info),
+          priority: ConversionPriority.high,
+        );
+        await Gal.putImageBytes(
+          result.bytes,
+          name:
+              'camera_image_${DateTime.now().millisecondsSinceEpoch}'
+              '_${frame.sequenceNumber}.jpg',
+        );
+        return true;
+      } catch (e) {
+        Fimber.e('Error saving image: $e', ex: e);
+        return false;
       }
     }
 
     int saved = 0;
     int failed = 0;
-
-    for (final frame in toSave) {
-      try {
-        final image = converted[frame.sequenceNumber] ?? await _convertCameraImageToUIImage(frame);
-        if (image == null) {
+    // Window the work so both workers stay busy without flooding the queue.
+    const concurrency = 3;
+    for (int start = 0; start < toSave.length; start += concurrency) {
+      final batch = toSave.skip(start).take(concurrency).toList();
+      final results = await Future.wait(batch.map(saveOne));
+      for (final ok in results) {
+        if (ok) {
+          saved++;
+        } else {
           failed++;
-          continue;
         }
-
-        final bytes = encodeJpgWithMetadata(
-          image.image,
-          timestamp: frame.timestamp,
-          position: position,
-          make: device?.make,
-          model: device?.model,
-        );
-        await Gal.putImageBytes(
-          bytes,
-          name:
-              'camera_image_${DateTime.now().millisecondsSinceEpoch}'
-              '_${frame.sequenceNumber}.jpg',
-        );
-        saved++;
-      } catch (e) {
-        Fimber.e('Error saving image: $e', ex: e);
-        failed++;
       }
     }
 
@@ -615,11 +620,11 @@ class _GalleryPageState extends State<GalleryPage> {
     );
   }
 
-  void _showFullscreenImage(BuildContext context, ProcessedImage timestampedImage, int index) {
+  void _showFullscreenImage(int index) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) =>
-            FullscreenImagePage(displayImages: _displayImages, rawImages: images, initialIndex: index),
+            FullscreenImagePage(thumbs: _thumbs, rawImages: images, initialIndex: index),
       ),
     );
   }
@@ -737,28 +742,14 @@ class _GalleryPageState extends State<GalleryPage> {
   /// the Lightning and All Photos sections. Pass [confidence] to show the
   /// detection badge in the corner (lightning section only).
   Widget _buildTile(int imageIndex, {double? confidence}) {
-    if (_displayImages[imageIndex] == null && !_currentlyConverting.contains(imageIndex)) {
-      _convertImageBatch(imageIndex, _batchSize);
-    }
-
-    final displayImage = _displayImages[imageIndex];
-    final isConverting = _currentlyConverting.contains(imageIndex);
+    final thumbImage = _thumbs[imageIndex]?.image;
     final selected = _selected.contains(imageIndex);
 
     Widget tileContent;
-    if (displayImage != null) {
+    if (thumbImage != null) {
       tileContent = ClipRRect(
         borderRadius: BorderRadius.circular(4),
-        child: FutureBuilder<ui.Image>(
-          future: displayImage.displayImage,
-          builder: (context, asyncSnapshot) => !asyncSnapshot.hasData
-              ? const Center(child: CircularProgressIndicator())
-              : RawImage(image: asyncSnapshot.requireData, fit: BoxFit.cover),
-        ),
-      );
-    } else if (isConverting) {
-      tileContent = const Center(
-        child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+        child: RawImage(image: thumbImage, fit: BoxFit.cover),
       );
     } else {
       tileContent = const Center(child: Icon(Icons.image, color: Colors.white54, size: 30));
@@ -768,8 +759,8 @@ class _GalleryPageState extends State<GalleryPage> {
       onTap: () {
         if (_selectionMode) {
           _toggleSelection(imageIndex);
-        } else if (displayImage != null) {
-          _showFullscreenImage(context, displayImage, imageIndex);
+        } else if (thumbImage != null) {
+          _showFullscreenImage(imageIndex);
         }
       },
       onLongPress: () {
@@ -957,21 +948,22 @@ class _GalleryPageState extends State<GalleryPage> {
   void dispose() {
     volumeKeyDispatcher.unsubscribe(_handleVolumeKey);
     lightningDetectionService.reset();
-    for (final image in _displayImages.values) {
-      image.dispose();
+    yuvConversionPool.cancelPending();
+    for (final thumb in _thumbs.values) {
+      thumb.dispose();
     }
     super.dispose();
   }
 }
 
 class FullscreenImagePage extends StatefulWidget {
-  final Map<int, ProcessedImage> displayImages;
+  final Map<int, ProcessedFrame> thumbs;
   final List<ImageWithMetadata> rawImages;
   final int initialIndex;
 
   const FullscreenImagePage({
     super.key,
-    required this.displayImages,
+    required this.thumbs,
     required this.rawImages,
     required this.initialIndex,
   });
@@ -983,7 +975,9 @@ class FullscreenImagePage extends StatefulWidget {
 class _FullscreenImagePageState extends State<FullscreenImagePage> {
   late final PageController _pageController;
   late int _currentIndex;
-  final Map<int, ProcessedImage> _localConverted = {};
+  // Full-resolution frames, kept only for the pages near the one on screen so
+  // browsing memory stays bounded.
+  final Map<int, ProcessedFrame> _fullRes = {};
   final Set<int> _converting = {};
 
   @override
@@ -991,45 +985,64 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
     super.initState();
     _currentIndex = widget.initialIndex;
     _pageController = PageController(initialPage: widget.initialIndex);
-    _ensureAdjacentConverted(widget.initialIndex);
+    _updateNeighborhood(widget.initialIndex);
   }
 
   @override
   void dispose() {
     _pageController.dispose();
+    for (final frame in _fullRes.values) {
+      frame.dispose();
+    }
     super.dispose();
   }
 
-  ProcessedImage? _getImage(int index) {
-    return widget.displayImages[index] ?? _localConverted[index];
-  }
+  /// Convert the current page and its immediate neighbors to full resolution,
+  /// and drop full-res frames that have drifted more than two pages away.
+  void _updateNeighborhood(int index) {
+    _ensureFullRes(index);
+    _ensureFullRes(index - 1);
+    _ensureFullRes(index + 1);
 
-  void _ensureAdjacentConverted(int index) {
-    for (final i in [index - 1, index + 1]) {
-      if (i >= 0 && i < widget.rawImages.length && _getImage(i) == null && !_converting.contains(i)) {
-        _convertImage(i);
-      }
+    const keepRadius = 2;
+    final stale = _fullRes.keys.where((k) => (k - index).abs() > keepRadius).toList();
+    for (final k in stale) {
+      _fullRes.remove(k)?.dispose();
     }
   }
 
-  Future<void> _convertImage(int index) async {
+  void _ensureFullRes(int index) {
+    if (index < 0 || index >= widget.rawImages.length) return;
+    if (_fullRes.containsKey(index) || _converting.contains(index)) return;
+    final frame = widget.rawImages[index];
+    if (frame.image.format.group != ImageFormatGroup.yuv420) return;
     _converting.add(index);
+    _convertFullRes(index, frame);
+  }
+
+  Future<void> _convertFullRes(int index, ImageWithMetadata frame) async {
     try {
-      final raw = widget.rawImages[index];
-      if (raw.image.format.group == ImageFormatGroup.yuv420) {
-        final result = await ImageConverter.processImage(raw);
-        if (mounted && result != null) {
-          setState(() {
-            _localConverted[index] = result;
-            _converting.remove(index);
-          });
-        }
+      final result = await yuvConversionPool.convert(
+        YuvConversionRequest.fullRes(frame),
+        priority: ConversionPriority.high,
+      );
+      if (!mounted) return;
+      final processed = ProcessedFrame(result.bytes, result.width, result.height);
+      await processed.uiImage;
+      processed.releaseBytes();
+      if (!mounted) {
+        processed.dispose();
+        return;
       }
+      setState(() {
+        _fullRes[index] = processed;
+        _converting.remove(index);
+      });
+    } on YuvCancelledException {
+      _converting.remove(index);
     } catch (e) {
       Fimber.e('Error converting image $index in fullscreen: $e', ex: e);
-      if (mounted) {
-        setState(() => _converting.remove(index));
-      }
+      if (mounted) setState(() => _converting.remove(index));
     }
   }
 
@@ -1053,34 +1066,28 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
         itemCount: widget.rawImages.length,
         onPageChanged: (index) {
           setState(() => _currentIndex = index);
-          _ensureAdjacentConverted(index);
+          _updateNeighborhood(index);
         },
         itemBuilder: (context, index) {
-          final image = _getImage(index);
-          if (image == null) {
-            if (!_converting.contains(index)) {
-              _convertImage(index);
-            }
-            return const Center(child: CircularProgressIndicator(color: Colors.white));
+          final fullImage = _fullRes[index]?.image;
+          if (fullImage != null) {
+            return Center(child: InteractiveViewer(child: RawImage(image: fullImage)));
           }
-          return Center(
-            child: InteractiveViewer(
-              child: FutureBuilder<ui.Image>(
-                future: image.displayImage,
-                builder: (context, asyncSnapshot) => !asyncSnapshot.hasData
-                    ? const Center(child: CircularProgressIndicator())
-                    : RawImage(image: asyncSnapshot.requireData),
-              ),
-            ),
-          );
+          // Show the grid thumbnail upscaled until the full-resolution frame
+          // lands, so page flips are instant rather than a spinner.
+          final thumbImage = widget.thumbs[index]?.image;
+          if (thumbImage != null) {
+            return Center(child: RawImage(image: thumbImage, fit: BoxFit.contain));
+          }
+          return const Center(child: CircularProgressIndicator(color: Colors.white));
         },
       ),
     );
   }
 
   Future<void> _saveImage(BuildContext context, int index) async {
-    final image = _getImage(index);
-    if (image == null) return;
+    final frame = widget.rawImages[index];
+    if (frame.image.format.group != ImageFormatGroup.yuv420) return;
 
     try {
       PermissionStatus permission = await Permission.photos.status;
@@ -1092,15 +1099,24 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
         final position = settingsManager.geotagPhotos ? await resolvePhotoLocation() : null;
         final device = await loadDeviceCameraInfo();
 
-        final bytes = encodeJpgWithMetadata(
-          image.image,
-          timestamp: widget.rawImages[index].timestamp,
-          position: position,
-          make: device?.make,
-          model: device?.model,
+        final result = await yuvConversionPool.convert(
+          YuvConversionRequest.jpeg(
+            frame,
+            JpegEncodeInfo(
+              timestamp: frame.timestamp,
+              latitude: position?.latitude,
+              longitude: position?.longitude,
+              altitude: position?.altitude,
+              heading: position?.heading,
+              gpsTimestamp: position?.timestamp,
+              make: device?.make,
+              model: device?.model,
+            ),
+          ),
+          priority: ConversionPriority.high,
         );
 
-        await Gal.putImageBytes(bytes, name: 'camera_image_${DateTime.now().millisecondsSinceEpoch}.jpg');
+        await Gal.putImageBytes(result.bytes, name: 'camera_image_${DateTime.now().millisecondsSinceEpoch}.jpg');
 
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

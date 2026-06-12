@@ -3,33 +3,42 @@ import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
-import 'package:image/image.dart' as img;
-import 'package:lightingcamera/native/yuv_converter_ffi.dart';
 
-import 'image_cache_manager.dart';
+/// A converted frame ready for display: RGBA pixel bytes plus the lazily-decoded
+/// [ui.Image] texture. The bytes can be released once the texture exists to keep
+/// memory low — thumbnails do this so a full buffer of them stays cheap.
+class ProcessedFrame {
+  ProcessedFrame(this._rgba, this.width, this.height);
 
-class ProcessedImage {
-  final img.Image image;
+  final int width;
+  final int height;
+
+  Uint8List? _rgba;
   ui.Image? _uiImage;
   Future<ui.Image>? _uiImageFuture;
   bool _disposed = false;
 
-  ProcessedImage(this.image);
+  /// The decoded texture, or null until [uiImage] has resolved at least once.
+  /// Callers that only add a frame to their state after awaiting [uiImage] can
+  /// read this directly instead of going back through the future.
+  ui.Image? get image => _uiImage;
 
-  Future<ui.Image> get displayImage {
-    if (_disposed) throw StateError('ProcessedImage has been disposed');
-    if (_uiImageFuture != null) return _uiImageFuture!;
-    _uiImageFuture = _createUiImage();
-    return _uiImageFuture!;
+  /// Decodes the RGBA bytes into a [ui.Image] once and caches the result.
+  Future<ui.Image> get uiImage {
+    if (_disposed) throw StateError('ProcessedFrame has been disposed');
+    return _uiImageFuture ??= _decode();
   }
 
-  Future<ui.Image> _createUiImage() {
+  Future<ui.Image> _decode() {
+    final bytes = _rgba;
+    if (bytes == null) {
+      throw StateError('ProcessedFrame bytes were released before decoding');
+    }
     final completer = Completer<ui.Image>();
-    final bytes = image.toUint8List();
     ui.decodeImageFromPixels(
       bytes,
-      image.width,
-      image.height,
+      width,
+      height,
       ui.PixelFormat.rgba8888,
       (ui.Image result) {
         _uiImage = result;
@@ -39,173 +48,62 @@ class ProcessedImage {
     return completer.future;
   }
 
+  /// Drops the CPU-side RGBA buffer. Safe to call after [uiImage] has resolved —
+  /// the texture lives on the GPU from then on.
+  void releaseBytes() => _rgba = null;
+
   void dispose() {
     _disposed = true;
+    _rgba = null;
     _uiImage?.dispose();
     _uiImage = null;
   }
 }
 
 class ImageConverter {
-  /// Processes an [ImageWithMetadata] to a displayable and saveable format.
-  ///
-  /// This method converts the YUV420 image from the camera into a standard
-  /// RGB format, applies the correct rotation to match the CameraPreview widget,
-  /// and returns an object that can be displayed or saved.
-  static ProcessedImage processImage(ImageWithMetadata imageWithMetadata) {
-    final cameraImage = imageWithMetadata.image;
-
-    // Apply rotation to match what CameraPreview shows
-    // The rotation logic needs to account for both device orientation AND camera type
-    double rotationAngle = _getRotationAngle(
-      imageWithMetadata.orientation,
-      imageWithMetadata.lensDirection,
-    );
-
-    // Convert YUV to RGB
-    img.Image rgbImage = _convertYuvToRgbOptimized(
-      cameraImage,
-      rotationAngle.toInt(),
-    );
-
-    // if (rotationAngle != 0) {
-    //   rgbImage = img.copyRotate(rgbImage, angle: rotationAngle);
-    // }
-
-    return ProcessedImage(rgbImage);
-  }
-
-  /// Determines the rotation angle needed to match CameraPreview orientation.
-  /// This logic accounts for both device orientation and camera type (front/back).
-  static double _getRotationAngle(
+  /// The rotation, in degrees, needed to make a captured frame upright to match
+  /// what `CameraPreview` shows. Accounts for both device orientation and lens
+  /// (front-facing sensors are mounted the opposite way). Always normalized to
+  /// one of 0/90/180/270 so the native converter's rotation switch never falls
+  /// through (a raw -90 used to be silently treated as 0).
+  static int rotationFor(
     DeviceOrientation orientation,
     CameraLensDirection lensDirection,
   ) {
-    // Back camera and front camera have different sensor orientations
-    // Front camera images are also mirrored horizontally by CameraPreview
-
+    int angle;
     if (lensDirection == CameraLensDirection.back) {
-      // Back camera rotation logic
       switch (orientation) {
         case DeviceOrientation.portraitUp:
-          return 90;
+          angle = 90;
         case DeviceOrientation.portraitDown:
-          return -90;
+          angle = -90;
         case DeviceOrientation.landscapeLeft:
-          return 0;
+          angle = 0;
         case DeviceOrientation.landscapeRight:
-          return 180;
+          angle = 180;
       }
     } else {
-      // Front camera rotation logic (different from back camera)
       switch (orientation) {
         case DeviceOrientation.portraitUp:
-          return -90; // Different from back camera
+          angle = -90;
         case DeviceOrientation.portraitDown:
-          return 90; // Different from back camera
+          angle = 90;
         case DeviceOrientation.landscapeLeft:
-          return 0; // Different from back camera
+          angle = 0;
         case DeviceOrientation.landscapeRight:
-          return 180; // Different from back camera
+          angle = 180;
       }
     }
+    return ((angle % 360) + 360) % 360;
   }
 
-  /// Uses native C for the conversion.
-  static img.Image _convertYuvToRgbOptimized(
-    CameraImage cameraImage,
-    int rotation,
-  ) {
-    final int width = cameraImage.width;
-    final int height = cameraImage.height;
-
-    final Uint8List yPlane = cameraImage.planes[0].bytes;
-    final Uint8List uPlane = cameraImage.planes[1].bytes;
-    final Uint8List vPlane = cameraImage.planes[2].bytes;
-
-    final int uvRowStride = cameraImage.planes[1].bytesPerRow;
-    final int uvPixelStride = cameraImage.planes[1].bytesPerPixel!;
-
-    // Use native FFI conversion
-    final Uint8List rgbData = YuvConverterFFI.convertYuvToRgb(
-      yPlane,
-      uPlane,
-      vPlane,
-      width,
-      height,
-      uvRowStride,
-      uvPixelStride,
-      rotation,
-    );
-
-    // Dimensions of the possibly-rotated output image
-    final int destWidth = (rotation == 90 || rotation == 270) ? height : width;
-    final int destHeight = (rotation == 90 || rotation == 270) ? width : height;
-
-    return img.Image.fromBytes(
-      width: destWidth,
-      height: destHeight,
-      bytes: rgbData.buffer,
-      order: img.ChannelOrder.rgba,
-    );
-  }
-
-  /// Converts a [CameraImage] in YUV420 format to a `img.Image` in RGB format.
-  ///
-  /// Note: This is a pure Dart implementation and is slow.
-  static img.Image _convertYuvToRgbDart(CameraImage cameraImage) {
-    final int width = cameraImage.width;
-    final int height = cameraImage.height;
-
-    final image = img.Image(width: width, height: height);
-
-    final Uint8List yPlane = cameraImage.planes[0].bytes;
-    final Uint8List uPlane = cameraImage.planes[1].bytes;
-    final Uint8List vPlane = cameraImage.planes[2].bytes;
-
-    final int uvRowStride = cameraImage.planes[1].bytesPerRow;
-    final int uvPixelStride = cameraImage.planes[1].bytesPerPixel!;
-
-    // Pre-calculate lookup tables for better performance
-    final List<int> yLookup = List.generate(256, (i) => i);
-    final List<int> uLookup = List.generate(256, (i) => i - 128);
-    final List<int> vLookup = List.generate(256, (i) => i - 128);
-
-    const int c_v_r = 1436;
-    const int c_u_g = 46549;
-    const int c_v_g = 93604;
-    const int c_u_b = 1814;
-
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        final int uvIndex = uvPixelStride * (x ~/ 2) + uvRowStride * (y ~/ 2);
-        final int yIndex = y * width + x;
-
-        final int yp = yLookup[yPlane[yIndex]];
-        final int up = uLookup[uPlane[uvIndex]];
-        final int vp = vLookup[vPlane[uvIndex]];
-
-        // YUV to RGB conversion
-        final int r = _clampValue(0, 255, yp + (vp * c_v_r) ~/ 1024);
-        final int g = _clampValue(
-          0,
-          255,
-          yp - (up * c_u_g) ~/ 131072 - (vp * c_v_g) ~/ 131072,
-        );
-        final int b = _clampValue(0, 255, yp + (up * c_u_b) ~/ 1024);
-
-        image.setPixelRgb(x, y, r, g, b);
-      }
-    }
-
-    return image;
-  }
-
-  /// Clamps [val] between [lower] and [higher].
-  /// Returns [lower] if [val] < [lower], [higher] if [val] > [higher], else [val].
-  static int _clampValue(int lower, int higher, int val) {
-    if (val < lower) return lower;
-    if (val > higher) return higher;
-    return val;
+  /// The integer downscale factor for a grid thumbnail of a [srcWidth] ×
+  /// [srcHeight] frame. Targets roughly 360px on the short side — sharp enough
+  /// for the densest grid while doing a fraction of the conversion work and
+  /// holding a fraction of the texture memory of a full-resolution frame.
+  static int thumbScaleFor(int srcWidth, int srcHeight) {
+    final shortSide = srcWidth < srcHeight ? srcWidth : srcHeight;
+    final scale = shortSide ~/ 360;
+    return scale < 1 ? 1 : scale;
   }
 }

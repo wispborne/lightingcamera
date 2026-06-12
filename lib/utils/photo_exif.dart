@@ -14,6 +14,33 @@ import 'logging.dart';
 /// add it here at save time. Location is optional: when the user has geotagging
 /// off, or hasn't granted location, we still write everything else.
 
+/// A self-contained, isolate-sendable bundle of the EXIF metadata for one saved
+/// frame. Holds only primitives (no `geolocator.Position`), so it can be handed
+/// to a background worker that does the JPEG encoding off the UI thread.
+class JpegEncodeInfo {
+  const JpegEncodeInfo({
+    required this.timestamp,
+    this.latitude,
+    this.longitude,
+    this.altitude,
+    this.heading,
+    this.gpsTimestamp,
+    this.make,
+    this.model,
+    this.quality = 95,
+  });
+
+  final DateTime timestamp;
+  final double? latitude;
+  final double? longitude;
+  final double? altitude;
+  final double? heading;
+  final DateTime? gpsTimestamp;
+  final String? make;
+  final String? model;
+  final int quality;
+}
+
 /// The phone's manufacturer and model, looked up once and reused. Null until the
 /// first [loadDeviceCameraInfo] call resolves it.
 ({String make, String model})? _deviceInfo;
@@ -66,9 +93,10 @@ Future<Position?> resolvePhotoLocation() async {
   }
 }
 
-/// Encodes [image] to JPEG at [quality], first writing common EXIF tags onto it:
-/// capture time, software, orientation, resolution, pixel dimensions, the
-/// camera [make]/[model], and the GPS [position] when one is supplied.
+/// Encodes [image] to JPEG, first writing common EXIF tags onto it: capture
+/// time, software, orientation, resolution, pixel dimensions, the camera
+/// make/model, and the GPS location when one is supplied. Adapter that bundles
+/// the [position] into a [JpegEncodeInfo] and delegates to [encodeJpgWithInfo].
 Uint8List encodeJpgWithMetadata(
   img.Image image, {
   required DateTime timestamp,
@@ -77,9 +105,31 @@ Uint8List encodeJpgWithMetadata(
   String? model,
   int quality = 95,
 }) {
+  return encodeJpgWithInfo(
+    image,
+    JpegEncodeInfo(
+      timestamp: timestamp,
+      latitude: position?.latitude,
+      longitude: position?.longitude,
+      altitude: position?.altitude,
+      heading: position?.heading,
+      gpsTimestamp: position?.timestamp,
+      make: make,
+      model: model,
+      quality: quality,
+    ),
+  );
+}
+
+/// Encodes [image] to JPEG at [info]'s quality, writing common EXIF tags from
+/// [info]. Pure Dart with no platform dependencies, so it runs in a background
+/// isolate.
+Uint8List encodeJpgWithInfo(img.Image image, JpegEncodeInfo info) {
   final exif = image.exif;
   final ifd0 = exif.imageIfd;
 
+  final make = info.make;
+  final model = info.model;
   if (make != null && make.isNotEmpty) ifd0['Make'] = make;
   if (model != null && model.isNotEmpty) ifd0['Model'] = model;
   ifd0['Software'] = 'Lightning Camera';
@@ -89,31 +139,31 @@ Uint8List encodeJpgWithMetadata(
   ifd0['XResolution'] = [72, 1];
   ifd0['YResolution'] = [72, 1];
   ifd0['ResolutionUnit'] = 2; // inches
-  ifd0['DateTime'] = _exifDateTime(timestamp);
+  ifd0['DateTime'] = _exifDateTime(info.timestamp);
 
   final exifIfd = exif.exifIfd;
-  exifIfd['DateTimeOriginal'] = _exifDateTime(timestamp);
-  exifIfd['DateTimeDigitized'] = _exifDateTime(timestamp);
+  exifIfd['DateTimeOriginal'] = _exifDateTime(info.timestamp);
+  exifIfd['DateTimeDigitized'] = _exifDateTime(info.timestamp);
   exifIfd['ColorSpace'] = 1; // sRGB
   exifIfd['PixelXDimension'] = image.width;
   exifIfd['PixelYDimension'] = image.height;
 
-  if (position != null) {
-    _writeGps(exif.gpsIfd, position);
+  if (info.latitude != null && info.longitude != null) {
+    _writeGps(exif.gpsIfd, info);
   }
 
-  return Uint8List.fromList(img.encodeJpg(image, quality: quality));
+  return Uint8List.fromList(img.encodeJpg(image, quality: info.quality));
 }
 
 /// Writes the GPS sub-IFD tags (latitude, longitude, altitude, heading, and the
-/// fix's UTC date/time) for [p].
+/// fix's UTC date/time) from [info].
 ///
 /// GPS tag IDs collide with unrelated tag IDs in the shared name→type table, so
 /// the directory's type inference would guess wrong for a plain list. We sidestep
 /// that by handing it fully-typed [img.IfdValue] objects, which it stores as-is.
-void _writeGps(img.IfdDirectory gps, Position p) {
-  final lat = p.latitude;
-  final lng = p.longitude;
+void _writeGps(img.IfdDirectory gps, JpegEncodeInfo info) {
+  final lat = info.latitude!;
+  final lng = info.longitude!;
 
   gps['GPSVersionID'] =
       img.IfdByteValue.list(Uint8List.fromList([2, 3, 0, 0]));
@@ -122,30 +172,35 @@ void _writeGps(img.IfdDirectory gps, Position p) {
   gps['GPSLongitudeRef'] = img.IfdValueAscii(lng >= 0 ? 'E' : 'W');
   gps['GPSLongitude'] = _degreesToDms(lng);
 
-  if (p.altitude.isFinite) {
-    gps['GPSAltitudeRef'] = img.IfdByteValue(p.altitude < 0 ? 1 : 0);
+  final altitude = info.altitude;
+  if (altitude != null && altitude.isFinite) {
+    gps['GPSAltitudeRef'] = img.IfdByteValue(altitude < 0 ? 1 : 0);
     gps['GPSAltitude'] =
-        img.IfdValueRational((p.altitude.abs() * 100).round(), 100);
+        img.IfdValueRational((altitude.abs() * 100).round(), 100);
   }
 
   // Compass heading the camera was pointing, when the fix carried one.
-  if (p.heading.isFinite && p.heading >= 0) {
+  final heading = info.heading;
+  if (heading != null && heading.isFinite && heading >= 0) {
     gps['GPSImgDirectionRef'] = img.IfdValueAscii('T'); // true north
     gps['GPSImgDirection'] =
-        img.IfdValueRational((p.heading * 100).round(), 100);
+        img.IfdValueRational((heading * 100).round(), 100);
   }
 
-  final utc = p.timestamp.toUtc();
-  gps['GPSTimeStamp'] = _rationals([
-    [utc.hour, 1],
-    [utc.minute, 1],
-    [utc.second, 1],
-  ]);
-  // Tag 0x1d (GPSDateStamp). Set by ID — the package labels it 'GPSDate', so
-  // the standard name would be silently dropped.
-  gps[0x1d] = img.IfdValueAscii(
-    '${_pad(utc.year, 4)}:${_pad(utc.month, 2)}:${_pad(utc.day, 2)}',
-  );
+  final gpsTimestamp = info.gpsTimestamp;
+  if (gpsTimestamp != null) {
+    final utc = gpsTimestamp.toUtc();
+    gps['GPSTimeStamp'] = _rationals([
+      [utc.hour, 1],
+      [utc.minute, 1],
+      [utc.second, 1],
+    ]);
+    // Tag 0x1d (GPSDateStamp). Set by ID — the package labels it 'GPSDate', so
+    // the standard name would be silently dropped.
+    gps[0x1d] = img.IfdValueAscii(
+      '${_pad(utc.year, 4)}:${_pad(utc.month, 2)}:${_pad(utc.day, 2)}',
+    );
+  }
 }
 
 /// Encodes a signed decimal coordinate as the three EXIF rationals

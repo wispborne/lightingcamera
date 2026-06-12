@@ -12,7 +12,8 @@ lib/
 │   ├── camera_page.dart            # live camera feed, exposure slider, volume shutter
 │   ├── gallery_page.dart           # image grid, fullscreen viewer, save-to-gallery
 │   ├── image_cache_manager.dart    # LRU frame cache (signals)
-│   └── image_converter.dart        # YUV→RGB via native FFI, rotation, JPEG encode
+│   ├── image_converter.dart        # ProcessedFrame (RGBA→ui.Image), rotation + thumb-scale helpers
+│   └── yuv_conversion_pool.dart    # background worker-isolate pool: YUV→RGBA, JPEG, NV21
 ├── native/
 │   └── yuv_converter_ffi.dart      # dart:ffi bindings to libyuv_converter.so
 └── utils/
@@ -26,16 +27,33 @@ lib/
 
 ## Image Pipeline
 
+All per-frame pixel work runs off the UI thread, in the `yuvConversionPool`
+(two long-lived worker isolates with a high/normal/low priority queue). The main
+isolate only builds requests, receives bytes, and uploads textures.
+
 ```
-CameraImage (YUV420)
-  → native C FFI (YuvConverterFFI) with inline rotation
-  → img.Image (RGB)
-  → lazy JPEG encode via compute() isolate
+CameraImage (YUV420)  ── plane bytes + strides ──▶  YuvConversionRequest
+                                                          │ (pool, background isolate)
+                                                          ▼
+                              native C FFI (convert_yuv_to_rgb_scaled,
+                              inline rotation + integer downscale)
+                                                          ▼
+   ┌──────────────────────────┬───────────────────────────┬─────────────────────┐
+   ▼ thumbnail (scaled RGBA)  ▼ full-res RGBA              ▼ JPEG (EXIF)          ▼ NV21
+ grid: ProcessedFrame       fullscreen: ProcessedFrame   save: Gal.putImageBytes  lightning scan
+ → ui.decodeImageFromPixels → ui.decodeImageFromPixels
 ```
 
-- Camera streams frames at device FPS into an LRU cache (max 100 frames).
-- Gallery lazy-converts cached frames in batches of 3 as the user scrolls.
-- Saving encodes to JPEG at 95% quality and writes via the `gal` package.
+- Camera streams frames at device FPS into a FIFO cache (max 100 frames).
+- Gallery eagerly converts **all** frames to reduced-resolution thumbnails on
+  open, so scrolling never waits on a conversion. `ImageConverter.thumbScaleFor`
+  picks the downscale factor (~360px short side).
+- Fullscreen shows the thumbnail upscaled instantly, then swaps to a full-res
+  conversion (kept only within ±2 pages); the grid keeps thumbnails only.
+- Saving converts at full resolution and JPEG-encodes (95% quality, EXIF via
+  `encodeJpgWithInfo`) **inside the workers**, then writes via the `gal` package.
+- The native converter honors the Y-plane row stride and a normalized
+  0/90/180/270 rotation (`ImageConverter.rotationFor`).
 
 ## Key Patterns
 

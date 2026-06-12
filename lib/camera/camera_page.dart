@@ -362,6 +362,7 @@ class CameraPageState extends State<CameraPage>
         }
 
         controller = newController;
+        newController.addListener(_onCameraValueChanged);
         break;
       } catch (e, st) {
         Fimber.e(
@@ -398,11 +399,22 @@ class CameraPageState extends State<CameraPage>
     }
   }
 
+  /// Rebuild when the controller's value changes — notably its reported device
+  /// orientation. `CameraPreview` rotates itself the instant that updates, so
+  /// the box we wrap it in has to reshape at the same moment. Without this the
+  /// box only caught up on the next periodic rebuild (up to ~1s later), leaving
+  /// a window — most visible when the camera reconnects after the gallery —
+  /// where a rotated preview sat in a stale, wrong-shaped box.
+  void _onCameraValueChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> _disposeCamera() async {
     final cam = controller;
     if (cam == null) {
       return;
     }
+    cam.removeListener(_onCameraValueChanged);
 
     if (isRecording) {
       try {

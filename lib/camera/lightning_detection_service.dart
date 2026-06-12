@@ -8,6 +8,8 @@ import 'package:lightingcamera/utils/logging.dart';
 import 'package:signals/signals.dart';
 
 import 'image_cache_manager.dart';
+import 'image_converter.dart';
+import 'yuv_conversion_pool.dart';
 
 final lightningDetectionService = LightningDetectionService();
 
@@ -97,7 +99,8 @@ class LightningDetectionService {
       if (gen != _generation) break;
       double confidence = 0.0;
       try {
-        final inputImage = _toInputImage(frame);
+        final inputImage = await _toInputImage(frame);
+        if (gen != _generation) break;
         if (inputImage != null) {
           final labels = await labeler.processImage(inputImage);
           if (gen != _generation) break;
@@ -108,6 +111,9 @@ class LightningDetectionService {
             }
           }
         }
+      } on YuvCancelledException {
+        // The gallery is tearing down the pool — stop scanning.
+        break;
       } catch (e) {
         Fimber.e('Lightning scan failed for frame ${frame.sequenceNumber}: $e',
             ex: e);
@@ -145,14 +151,18 @@ class LightningDetectionService {
   }
 
   /// Wraps a cached YUV420 frame as an ML Kit [InputImage] (NV21 bytes), or
-  /// `null` if the frame is not YUV420.
-  InputImage? _toInputImage(ImageWithMetadata frame) {
+  /// `null` if the frame is not YUV420. The NV21 packing runs in the shared
+  /// conversion pool at low priority so it never delays gallery thumbnails.
+  Future<InputImage?> _toInputImage(ImageWithMetadata frame) async {
     final image = frame.image;
     if (image.format.group != ImageFormatGroup.yuv420) return null;
 
-    final nv21 = _yuv420ToNv21(image);
+    final packed = await yuvConversionPool.convert(
+      YuvConversionRequest.nv21(frame),
+      priority: ConversionPriority.low,
+    );
     return InputImage.fromBytes(
-      bytes: nv21,
+      bytes: packed.bytes,
       metadata: InputImageMetadata(
         size: Size(image.width.toDouble(), image.height.toDouble()),
         rotation: _rotationFor(frame.orientation, frame.lensDirection),
@@ -162,84 +172,13 @@ class LightningDetectionService {
     );
   }
 
-  /// Packs a 3-plane YUV420 [image] into a single NV21 buffer: the Y plane
-  /// (row-stride stripped to width) followed by interleaved V/U chroma.
-  Uint8List _yuv420ToNv21(CameraImage image) {
-    final int width = image.width;
-    final int height = image.height;
-    final int chromaWidth = (width + 1) ~/ 2;
-    final int chromaHeight = (height + 1) ~/ 2;
-
-    final nv21 = Uint8List(width * height + 2 * chromaWidth * chromaHeight);
-
-    // Y plane, dropping any row padding.
-    final yPlane = image.planes[0];
-    final yBytes = yPlane.bytes;
-    final int yRowStride = yPlane.bytesPerRow;
-    int offset = 0;
-    if (yRowStride == width) {
-      nv21.setRange(0, width * height, yBytes);
-      offset = width * height;
-    } else {
-      for (int row = 0; row < height; row++) {
-        final int rowStart = row * yRowStride;
-        nv21.setRange(offset, offset + width, yBytes, rowStart);
-        offset += width;
-      }
-    }
-
-    // Chroma: NV21 wants V then U, interleaved. Handle both planar
-    // (pixelStride 1) and semi-planar (pixelStride 2) source layouts.
-    final uPlane = image.planes[1];
-    final vPlane = image.planes[2];
-    final uBytes = uPlane.bytes;
-    final vBytes = vPlane.bytes;
-    final int uvRowStride = uPlane.bytesPerRow;
-    final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
-
-    for (int row = 0; row < chromaHeight; row++) {
-      int uvIndex = row * uvRowStride;
-      for (int col = 0; col < chromaWidth; col++) {
-        nv21[offset++] = vBytes[uvIndex];
-        nv21[offset++] = uBytes[uvIndex];
-        uvIndex += uvPixelStride;
-      }
-    }
-
-    return nv21;
-  }
-
   /// Maps the frame's device orientation and lens to the ML Kit rotation that
-  /// makes the image upright, mirroring [ImageConverter]'s display-path angles.
+  /// makes the image upright, reusing [ImageConverter]'s display-path angles.
   InputImageRotation _rotationFor(
     DeviceOrientation orientation,
     CameraLensDirection lensDirection,
   ) {
-    int angle;
-    if (lensDirection == CameraLensDirection.back) {
-      switch (orientation) {
-        case DeviceOrientation.portraitUp:
-          angle = 90;
-        case DeviceOrientation.portraitDown:
-          angle = 270;
-        case DeviceOrientation.landscapeLeft:
-          angle = 0;
-        case DeviceOrientation.landscapeRight:
-          angle = 180;
-      }
-    } else {
-      switch (orientation) {
-        case DeviceOrientation.portraitUp:
-          angle = 270;
-        case DeviceOrientation.portraitDown:
-          angle = 90;
-        case DeviceOrientation.landscapeLeft:
-          angle = 0;
-        case DeviceOrientation.landscapeRight:
-          angle = 180;
-      }
-    }
-    switch (angle) {
+    switch (ImageConverter.rotationFor(orientation, lensDirection)) {
       case 90:
         return InputImageRotation.rotation90deg;
       case 180:

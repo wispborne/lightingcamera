@@ -85,4 +85,40 @@ void main() {
     expect(exif.gpsIfd.isEmpty, isTrue);
     expect(exif.imageIfd['Model']?.toString(), 'Pixel 9 Pro');
   });
+
+  test('encodeJpgWithInfo matches the Position-based adapter', () {
+    const timestamp = (year: 2026, month: 6, day: 11);
+    final viaInfo = encodeJpgWithInfo(
+      img.Image(width: 4, height: 4),
+      JpegEncodeInfo(
+        timestamp: DateTime(timestamp.year, timestamp.month, timestamp.day, 14, 30, 15),
+        latitude: 37.422,
+        longitude: -122.084,
+        altitude: 12.5,
+        heading: 90.0,
+        gpsTimestamp: DateTime.utc(timestamp.year, timestamp.month, timestamp.day, 14, 30, 15),
+        make: 'Google',
+        model: 'Pixel 9 Pro',
+      ),
+    );
+    final viaAdapter = encodeJpgWithMetadata(
+      img.Image(width: 4, height: 4),
+      timestamp: DateTime(timestamp.year, timestamp.month, timestamp.day, 14, 30, 15),
+      position: fakePosition(),
+      make: 'Google',
+      model: 'Pixel 9 Pro',
+    );
+
+    final a = img.decodeJpg(viaInfo)!.exif;
+    final b = img.decodeJpg(viaAdapter)!.exif;
+    expect(a.imageIfd['Make']?.toString(), b.imageIfd['Make']?.toString());
+    expect(a.imageIfd['Model']?.toString(), b.imageIfd['Model']?.toString());
+    expect(a.imageIfd['DateTime']?.toString(), b.imageIfd['DateTime']?.toString());
+    expect(a.gpsIfd['GPSLatitudeRef']?.toString(), b.gpsIfd['GPSLatitudeRef']?.toString());
+    expect(a.gpsIfd['GPSLatitude']?.toString(), b.gpsIfd['GPSLatitude']?.toString());
+    expect(a.gpsIfd['GPSLongitude']?.toString(), b.gpsIfd['GPSLongitude']?.toString());
+    expect(a.gpsIfd['GPSAltitude']?.toDouble(), b.gpsIfd['GPSAltitude']?.toDouble());
+    expect(a.gpsIfd['GPSImgDirection']?.toDouble(), b.gpsIfd['GPSImgDirection']?.toDouble());
+    expect(a.gpsIfd[0x1d]?.toString(), b.gpsIfd[0x1d]?.toString());
+  });
 }

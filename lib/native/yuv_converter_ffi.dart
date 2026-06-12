@@ -13,9 +13,11 @@ typedef ConvertYuvToRgbNative =
       Pointer<Uint8> rgbOutput,
       Int32 width,
       Int32 height,
+      Int32 yRowStride,
       Int32 uvRowStride,
       Int32 uvPixelStride,
       Int32 rotation,
+      Int32 scale,
     );
 
 typedef ConvertYuvToRgbDart =
@@ -26,16 +28,20 @@ typedef ConvertYuvToRgbDart =
       Pointer<Uint8> rgbOutput,
       int width,
       int height,
+      int yRowStride,
       int uvRowStride,
       int uvPixelStride,
       int rotation,
+      int scale,
     );
 
 class YuvConverterFFI {
   static DynamicLibrary? _library;
   static ConvertYuvToRgbDart? _convertYuvToRgb;
 
-  // Load the native library
+  // Load the native library. Statics are per-isolate, so each background
+  // worker that calls this opens its own handle to the shared library on
+  // first use — there is no cross-isolate state to coordinate.
   static void _loadLibrary() {
     if (_library != null) return;
 
@@ -47,34 +53,43 @@ class YuvConverterFFI {
       throw UnsupportedError('Platform not supported');
     }
 
-    _convertYuvToRgb =
-        _library!
-            .lookup<NativeFunction<ConvertYuvToRgbNative>>('convert_yuv_to_rgb')
-            .asFunction<ConvertYuvToRgbDart>();
+    _convertYuvToRgb = _library!
+        .lookup<NativeFunction<ConvertYuvToRgbNative>>('convert_yuv_to_rgb_scaled')
+        .asFunction<ConvertYuvToRgbDart>();
   }
 
-  // Convert YUV to RGB using native code
+  /// Converts YUV420 planes to an RGBA byte buffer using the native code,
+  /// optionally downscaling by [scale] (1 = full resolution) and rotating by
+  /// [rotation] (0/90/180/270, already normalized). Returns RGBA bytes sized
+  /// `(width ~/ scale) * (height ~/ scale) * 4` — the rotation only swaps the
+  /// width/height of that buffer, never its size.
   static Uint8List convertYuvToRgb(
     Uint8List yPlane,
     Uint8List uPlane,
-    Uint8List vPlane,
-    int width,
-    int height,
-    int uvRowStride,
-    int uvPixelStride,
-    int rotation,
-  ) {
+    Uint8List vPlane, {
+    required int width,
+    required int height,
+    required int yRowStride,
+    required int uvRowStride,
+    required int uvPixelStride,
+    required int rotation,
+    int scale = 1,
+  }) {
     _loadLibrary();
 
-    // Use an Arena for automatic memory management
-    // Memory allocated within the arena is freed when the arena is disposed
+    final int s = scale < 1 ? 1 : scale;
+    final int outWidth = width ~/ s;
+    final int outHeight = height ~/ s;
+    final int outBytes = outWidth * outHeight * 4;
+
+    // Use an Arena for automatic memory management — everything allocated here
+    // is freed when the arena is released in the finally block.
     final arena = Arena();
     try {
-      // Allocate native memory within the arena
       final yPointer = arena<Uint8>(yPlane.length);
       final uPointer = arena<Uint8>(uPlane.length);
       final vPointer = arena<Uint8>(vPlane.length);
-      final rgbPointer = arena<Uint8>(width * height * 4);
+      final rgbPointer = arena<Uint8>(outBytes);
 
       // Copy data to native memory
       yPointer.asTypedList(yPlane.length).setAll(0, yPlane);
@@ -89,15 +104,16 @@ class YuvConverterFFI {
         rgbPointer,
         width,
         height,
+        yRowStride,
         uvRowStride,
         uvPixelStride,
         rotation,
+        s,
       );
 
       // Copy result back to Dart
-      return Uint8List.fromList(rgbPointer.asTypedList(width * height * 4));
+      return Uint8List.fromList(rgbPointer.asTypedList(outBytes));
     } finally {
-      // Dispose the arena to free all allocated memory
       arena.releaseAll();
     }
   }
