@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lightingcamera/camera/camera_page.dart';
 import 'package:lightingcamera/camera/gallery_page.dart';
+import 'package:lightingcamera/lightning/alert_service_controller.dart';
 import 'package:lightingcamera/lightning/lightning_map_page.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
 import 'package:lightingcamera/settings/settings_page.dart';
@@ -22,6 +23,10 @@ void main() async {
   ));
   configureLogging();
   await settingsManager.init();
+  // Configure the alert foreground service and reconcile it with the saved
+  // setting — start it if alerts are on but it isn't running (e.g. after an
+  // app update or the process being killed), stop it if it's stale.
+  await alertServiceController.syncToSetting();
   runApp(const MyApp());
 }
 

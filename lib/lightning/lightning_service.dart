@@ -69,6 +69,19 @@ class LightningService {
   final ListSignal<Strike> _strikes = listSignal<Strike>([]);
   ReadonlySignal<List<Strike>> get strikes => _strikes;
 
+  /// Every strike as it arrives, for listeners that want individual events
+  /// rather than diffing the [strikes] list — chiefly the background alert
+  /// service. Broadcast so multiple holders can listen; the UI ignores it.
+  final StreamController<Strike> _strikeController =
+      StreamController<Strike>.broadcast();
+  Stream<Strike> get strikeStream => _strikeController.stream;
+
+  /// Record a strike: add it to the list and emit it on [strikeStream].
+  void _addStrike(Strike strike) {
+    _strikes.add(strike);
+    _strikeController.add(strike);
+  }
+
   /// The most recent center any holder resolved and acquired with. Lets a page
   /// (e.g. the map) open at the user's location immediately instead of waiting
   /// for its own fresh GPS fix. Null until the first [acquire].
@@ -291,7 +304,7 @@ class LightningService {
       radiusKm: testRadiusKm,
       interval: testStrikeInterval,
       onStrike: (point) {
-        _strikes.add(Strike(point, DateTime.now()));
+        _addStrike(Strike(point, DateTime.now()));
         _prune();
       },
     )..start();
@@ -352,7 +365,7 @@ class LightningService {
         final time = DateTime.fromMillisecondsSinceEpoch(
           (map['time'] as num).toInt(),
         );
-        _strikes.add(Strike(LatLng(lat, lon), time));
+        _addStrike(Strike(LatLng(lat, lon), time));
         _prune();
         return;
       }

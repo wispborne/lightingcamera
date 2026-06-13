@@ -43,6 +43,12 @@ class SettingsManager {
   static const _lightningThresholdKey = 'lightning_confidence_threshold';
   static const _geotagPhotosKey = 'geotag_photos';
   static const _galleryCrossAxisCountKey = 'gallery_cross_axis_count';
+  static const _lightningAlertsEnabledKey = 'lightning_alerts_enabled';
+  static const _alertRadiusKmKey = 'alert_radius_km';
+
+  /// Default radius for proximity alerts, in kilometres. Bounded by the same
+  /// [minStrikeDistanceKm]/[maxStrikeDistanceKm] range the overlay filter uses.
+  static const double defaultAlertRadiusKm = 15;
 
   /// Bounds for the overlay's maximum strike distance, in kilometres.
   static const double minStrikeDistanceKm = 5;
@@ -216,6 +222,22 @@ class SettingsManager {
   ReadonlySignal<int?> get galleryCrossAxisCountSignal => _galleryCrossAxisCount;
   int? get galleryCrossAxisCount => _galleryCrossAxisCount.value;
 
+  /// When on, a background service watches the relay and notifies the user when
+  /// lightning strikes within [alertRadiusKm] of them — even with the app
+  /// closed. Off by default; it runs a persistent foreground service and needs
+  /// notification permission.
+  late final Signal<bool> _lightningAlertsEnabled;
+  ReadonlySignal<bool> get lightningAlertsEnabledSignal =>
+      _lightningAlertsEnabled;
+  bool get lightningAlertsEnabled => _lightningAlertsEnabled.value;
+
+  /// How close a strike must be to trigger a proximity alert, in kilometres.
+  /// Clamped to [minStrikeDistanceKm]–[maxStrikeDistanceKm]; defaults to
+  /// [defaultAlertRadiusKm].
+  late final Signal<double> _alertRadiusKm;
+  ReadonlySignal<double> get alertRadiusKmSignal => _alertRadiusKm;
+  double get alertRadiusKm => _alertRadiusKm.value;
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     // Per-orientation shutter positions. The X for each orientation falls back
@@ -286,6 +308,14 @@ class SettingsManager {
     );
     _geotagPhotos = signal(prefs.getBool(_geotagPhotosKey) ?? true);
     _galleryCrossAxisCount = signal(prefs.getInt(_galleryCrossAxisCountKey));
+    _lightningAlertsEnabled = signal(
+      prefs.getBool(_lightningAlertsEnabledKey) ?? false,
+    );
+    final storedRadius =
+        prefs.getDouble(_alertRadiusKmKey) ?? defaultAlertRadiusKm;
+    _alertRadiusKm = signal(
+      storedRadius.clamp(minStrikeDistanceKm, maxStrikeDistanceKm),
+    );
   }
 
   Future<void> setShutterOffset(
@@ -444,6 +474,18 @@ class SettingsManager {
     _galleryCrossAxisCount.value = count;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_galleryCrossAxisCountKey, count);
+  }
+
+  Future<void> setLightningAlertsEnabled(bool enabled) async {
+    _lightningAlertsEnabled.value = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_lightningAlertsEnabledKey, enabled);
+  }
+
+  Future<void> setAlertRadiusKm(double km) async {
+    _alertRadiusKm.value = km.clamp(minStrikeDistanceKm, maxStrikeDistanceKm);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_alertRadiusKmKey, _alertRadiusKm.value);
   }
 
   void enterRepositionMode() {

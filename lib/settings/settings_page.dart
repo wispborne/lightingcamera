@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:signals/signals_flutter.dart';
+import 'package:lightingcamera/lightning/alert_service_controller.dart';
 import 'package:lightingcamera/lightning/lightning_service.dart';
 import 'package:lightingcamera/utils/units.dart';
 import 'settings_manager.dart';
@@ -44,10 +45,12 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _saveUrl() {
     settingsManager.setCustomRelayUrl(_urlController.text.trim());
+    alertServiceController.notifySettingsChanged();
   }
 
   void _saveKey() {
     settingsManager.setRelayKey(_keyController.text.trim());
+    alertServiceController.notifySettingsChanged();
   }
 
   Future<void> _testConnection() async {
@@ -82,6 +85,42 @@ class _SettingsPageState extends State<SettingsPage> {
         _testResultMessage = message;
       });
     }
+  }
+
+  /// Turn lightning alerts on or off. Enabling needs either a relay key or test
+  /// mode (otherwise there's nothing to watch) and notification permission; if
+  /// either is missing the toggle reverts with a brief explanation.
+  Future<void> _toggleAlerts(bool enabled) async {
+    if (!enabled) {
+      await settingsManager.setLightningAlertsEnabled(false);
+      await alertServiceController.stop();
+      return;
+    }
+
+    final hasKey = settingsManager.relayKey.isNotEmpty;
+    if (!hasKey && !settingsManager.lightningTestMode) {
+      _showAlertsMessage(
+        'Set a relay key (or turn on test mode) before enabling alerts.',
+      );
+      return;
+    }
+
+    // Persist first so the service's launch-time sync sees it enabled.
+    await settingsManager.setLightningAlertsEnabled(true);
+    final started = await alertServiceController.start();
+    if (!started) {
+      await settingsManager.setLightningAlertsEnabled(false);
+      _showAlertsMessage(
+        'Lightning alerts need notification permission to work.',
+      );
+    }
+  }
+
+  void _showAlertsMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   /// The relay URL field, wrapped in a [RawAutocomplete] so that focusing it
@@ -250,8 +289,10 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                     ],
                     selected: {units},
-                    onSelectionChanged: (selection) =>
-                        settingsManager.setUnitSystem(selection.first),
+                    onSelectionChanged: (selection) {
+                      settingsManager.setUnitSystem(selection.first);
+                      alertServiceController.notifySettingsChanged();
+                    },
                   ),
                 ],
               ),
@@ -265,7 +306,10 @@ class _SettingsPageState extends State<SettingsPage> {
                 'Reopen the map to apply.',
               ),
               value: settingsManager.lightningTestModeSignal.value,
-              onChanged: settingsManager.setLightningTestMode,
+              onChanged: (value) {
+                settingsManager.setLightningTestMode(value);
+                alertServiceController.notifySettingsChanged();
+              },
             ),
           ),
           Watch(
@@ -475,6 +519,63 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
               ),
             ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              'Alerts',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: colorScheme.primary,
+                  ),
+            ),
+          ),
+          SignalBuilder(
+            builder: (context) => SwitchListTile(
+              title: const Text('Lightning alerts'),
+              subtitle: const Text(
+                'Notify me when lightning strikes nearby, even with the app '
+                'closed. Runs a background service and uses location.',
+              ),
+              value: settingsManager.lightningAlertsEnabledSignal.value,
+              onChanged: _toggleAlerts,
+            ),
+          ),
+          SignalBuilder(builder: (context) {
+            final enabled = settingsManager.lightningAlertsEnabledSignal.value;
+            final radius = settingsManager.alertRadiusKmSignal.value;
+            final units = settingsManager.unitSystemSignal.value;
+            final label = formatDistanceKm(radius, units);
+            return ListTile(
+              enabled: enabled,
+              title: const Text('Alert radius'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Alert me only when a strike lands this close. This is '
+                    'separate from the overlay\'s display distance.',
+                  ),
+                  Slider(
+                    value: radius,
+                    min: SettingsManager.minStrikeDistanceKm,
+                    max: SettingsManager.maxStrikeDistanceKm,
+                    divisions:
+                        (SettingsManager.maxStrikeDistanceKm -
+                                SettingsManager.minStrikeDistanceKm)
+                            ~/ 5,
+                    label: label,
+                    onChanged: enabled
+                        ? (value) {
+                            settingsManager.setAlertRadiusKm(value);
+                            alertServiceController.notifySettingsChanged();
+                          }
+                        : null,
+                  ),
+                ],
+              ),
+              trailing: Text(label),
+            );
+          }),
           const SizedBox(height: 16),
         ],
       ),
