@@ -1,6 +1,6 @@
-// Shared subscriber gauge. The upstream Blitzortung connection is lazy — held open
-// only while someone is watching. Both fronts (the app server's box subscriptions
-// and the web map's viewers) feed this one counter so either can wake the upstream.
+// Shared subscriber gauge: a live count of active watchers across both fronts (the app
+// server's box subscriptions and the web map's viewers). The upstream Blitzortung
+// connection stays open regardless; this is just for visibility/logging.
 
 export function makeSubscriberGauge({ onFirst, onLast } = {}) {
   let count = 0;

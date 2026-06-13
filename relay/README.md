@@ -24,7 +24,7 @@ relay/
 │   ├── config.js         # config loader (defaults <- config.yaml) + logger
 │   ├── geo.js            # center+radius -> bounding box, in-box test
 │   ├── upstream.js       # Blitzortung connection, reconnect/failover, heartbeat
-│   ├── subscribers.js    # shared gauge: app + web viewers wake the lazy upstream
+│   ├── subscribers.js    # shared gauge: live count of app + web viewers
 │   ├── server.js         # app-facing websocket server + box fan-out
 │   └── web.js            # browser-facing world map: static page + unfiltered /ws
 └── web/                  # the world map page (vanilla JS + vendored Leaflet)
@@ -166,8 +166,8 @@ The page's websocket (`/ws`) needs **no key** — the relay sends without being 
 - `{ "type": "strike", "lat", "lon", "time" }` live
 - `{ "type": "ping" }` keepalives
 
-Viewers count as subscribers, so opening the page wakes the upstream Blitzortung
-connection just like an app client does.
+Viewers count as subscribers for the live-count gauge, but the upstream Blitzortung
+connection is always open — the page starts receiving strikes immediately.
 
 ### Auth: Caddy + tinyauth
 

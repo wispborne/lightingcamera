@@ -68,6 +68,56 @@ CameraImage (YUV420)  ── plane bytes + strides ──▶  YuvConversionReque
 - CMake: `android/app/src/main/cpp/CMakeLists.txt` — compiles as shared lib with `-O3 -ffast-math` and NEON on ARM.
 - NDK ABI filters: `arm64-v8a`, `armeabi-v7a`, `x86_64`.
 
+## Relay (`relay/`)
+
+A small **Node** service (ESM, deps: `ws` + `yaml`) that the lightning features talk to.
+It holds one upstream websocket to the [Blitzortung](https://www.blitzortung.org/)
+community lightning network, decodes the feed, and fans strikes out to clients — each app
+client filtered to a bounding box around the user. A relay is required because
+Blitzortung's data policy forbids connecting phones directly, and the data is
+**non-commercial only**. The full reference is `relay/README.md`; the essentials:
+
+```
+relay/
+├── index.js              # entry point: wires upstream -> servers, holds connection open
+├── spike.js              # standalone go/no-go test (prints decoded strikes)
+├── config.default.yaml   # shipped, commented defaults (do not edit)
+├── config.yaml           # gitignored local overlay (auth keys, host/port, tls, web)
+├── lightning-relay.service  # systemd unit for the VPS
+├── src/
+│   ├── decode.js         # Blitzortung LZW decode + strike normalization
+│   ├── config.js         # config loader (defaults <- config.yaml) + logger
+│   ├── geo.js            # center+radius -> bounding box, in-box test
+│   ├── upstream.js       # Blitzortung connection, reconnect/failover, heartbeat
+│   ├── subscribers.js    # shared gauge: live count of app + web viewers
+│   ├── history.js        # rolling last-5-min strike buffer, snapshotted to disk
+│   ├── server.js         # app-facing websocket server + box fan-out
+│   └── web.js            # browser-facing world map: static page + unfiltered /ws
+└── web/                  # the world map page (vanilla JS + vendored Leaflet)
+```
+
+- **Data flow:** `upstream.js` decodes each Blitzortung strike → `index.js` drops stale
+  ones, adds to `history`, then broadcasts to `server` (app clients) and `web` (map). The
+  upstream stays connected for the relay's whole lifetime, so `history` keeps filling even
+  with no clients — a freshly opened map is already populated.
+- **Strike shape:** `{ "type": "strike", "lat": <deg>, "lon": <deg>, "time": <ms epoch> }`.
+- **App protocol:** client connects, sends `{ "auth": "<key>" }` as the **first** message
+  (relay acks or closes with `4001`), then `{ "lat", "lon", "radiusKm" }` to set/move its
+  box. Relay streams matching strikes. Keepalive: ws-level ping + app-level
+  `{ "type": "ping" }` every `server.heartbeatMs` (30s). Close codes 4000–4004 are
+  documented in the README (auth timeout, unauthorized, session expired, IP banned, too
+  many connections).
+- **Auth:** private — keys live in `config.yaml` under `auth.keys` (name → key). No key
+  rotation/DB; editing the file + restart is how you grant/revoke.
+- **Web map (optional):** `web.enabled` serves an unfiltered world map on a second port
+  (`/ws` needs no key) — keep it on `127.0.0.1` behind Caddy + tinyauth, never exposed.
+- **App side:** the Flutter client lives in `lib/lightning/` (`lightning_service.dart`
+  holds the relay URL and websocket logic; `alert_service`, `strike_overlay`, `mini_map`,
+  `lightning_map_page` consume it).
+- **Run:** `cd relay && npm install`, then `npm run spike` (sanity check, prints 5 strikes
+  and exits) or `npm start` (serves `ws://0.0.0.0:8787`). Deploy via the systemd unit on
+  the VPS; the app needs `wss://`, so terminate TLS at a reverse proxy.
+
 ## UI Guidelines
 
 Follow minimal Material Design 3 best practices:

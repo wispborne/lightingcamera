@@ -1,6 +1,7 @@
 // Lightning relay entry point: load config, start the client-facing server (and the
-// browser map server if enabled), then connect upstream to Blitzortung only while at
-// least one client — app or web viewer — is subscribed.
+// browser map server if enabled), then connect upstream to Blitzortung and hold that
+// connection open for the relay's whole lifetime so strike history keeps accumulating
+// even with no clients watching.
 
 import { loadConfig, makeLogger } from './src/config.js';
 import { DISPLAY_WINDOW_MS, makeStrikeHistory } from './src/history.js';
@@ -43,20 +44,24 @@ function disconnectUpstream() {
   }
 }
 
+// Just a live count now — the upstream connection no longer rides on it. We keep the
+// gauge so the servers can still log how many viewers are active.
 const subscribers = makeSubscriberGauge({
   onFirst() {
-    log.info('first subscriber connected, starting upstream');
-    connectUpstream();
+    log.info('first subscriber connected');
   },
   onLast() {
-    log.info('last subscriber disconnected, stopping upstream');
-    disconnectUpstream();
+    log.info('last subscriber disconnected');
   },
 });
 
 log.info('starting lightning relay');
 const server = startServer(config, log, subscribers, history);
 const web = config.web?.enabled ? startWeb(config, log, subscribers, history) : null;
+
+// Connect upstream immediately and keep it open. History fills in the background so a
+// map opened to check a flash you thought you saw already has the recent strikes.
+connectUpstream();
 
 function shutdown(signal) {
   log.info(`received ${signal}, shutting down`);
