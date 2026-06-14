@@ -239,6 +239,11 @@ async function refreshRadar() {
         // serves a static "Zoom level not supported" placeholder. Cap native
         // requests here and let Leaflet upscale the z7 tile for closer views.
         maxNativeZoom: 7,
+        // Match the base map's maxZoom so the upscaled z7 tile keeps showing at
+        // every zoom level (Leaflet's layer default is 18, which would drop the
+        // rain layer at the closest zooms). Mirrors the app map, where the radar
+        // tile layer has no upper zoom cap.
+        maxZoom: 19,
         attribution:
           'Radar &copy; <a href="https://www.rainviewer.com/">RainViewer</a>',
       }).addTo(map);
