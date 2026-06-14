@@ -52,7 +52,7 @@
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="dataSync|location"
             android:exported="false"
-            tools:replace="android:foregroundServiceType" />
+            tools:replace="android:foregroundServiceType,android:exported" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
