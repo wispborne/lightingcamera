@@ -17,6 +17,7 @@ decode/reconnect logic in one place.
 relay/
 ├── index.js              # entry point: wires upstream -> servers
 ├── spike.js              # standalone go/no-go test (prints decoded strikes)
+├── query-archive.js      # read-only query helper for the strike archive
 ├── config.default.yaml  # shipped, commented defaults (do not edit; overlay with config.yaml)
 ├── lightning-relay.service  # systemd unit for the VPS
 ├── src/
@@ -25,6 +26,7 @@ relay/
 │   ├── geo.js            # center+radius -> bounding box, in-box test
 │   ├── upstream.js       # Blitzortung connection, reconnect/failover, heartbeat
 │   ├── subscribers.js    # shared gauge: live count of app + web viewers
+│   ├── archive.js        # permanent SQLite archive of every strike (batched writes)
 │   ├── server.js         # app-facing websocket server + box fan-out
 │   └── web.js            # browser-facing world map: static page + unfiltered /ws
 └── web/                  # the world map page (vanilla JS + vendored Leaflet)
@@ -112,6 +114,78 @@ shape — upstream URLs, `server.host`/`port`/`tls`/`heartbeatMs`, `limits.maxBo
 too, since JSON is valid YAML.
 
 You can also point at a config elsewhere with `RELAY_CONFIG=/path/to/config.yaml`.
+
+## Strike archive
+
+The relay keeps only the last few minutes of strikes in memory (the rolling history,
+used to seed a client's map). The **archive** is a separate, permanent record: every
+strike the relay receives is also written to a single SQLite database on disk, so a
+storm can be queried long after it has faded. It's off by default — turn it on where
+there's room to keep everything (e.g. the laptop's external SSD).
+
+Enable it in `config.yaml`:
+
+```yaml
+archive:
+  enabled: true
+  dbPath: /mnt/ssd/lightning/strike-archive.db   # absolute path on the SSD
+  flushIntervalMs: 5000   # write buffered strikes at least this often...
+  batchSize: 1000         # ...or sooner once this many are buffered
+```
+
+- **Requires Node 22.5+** — it uses the built-in `node:sqlite`, so the relay gains no
+  extra dependencies. `node:sqlite` is still experimental and prints a one-line warning
+  on startup when archiving is enabled.
+- **Batched writes:** strikes are buffered and written in one transaction per flush, so
+  thousands of strikes cost a handful of disk writes. A hard crash can lose the few
+  seconds buffered since the last flush; a clean stop (SIGINT/SIGTERM) flushes first.
+- **Fails soft:** if the database can't be opened (SSD unplugged, missing directory) the
+  relay logs it and keeps running with archiving off — live fan-out is never affected.
+- **Path:** absolute paths are used as-is; a relative path resolves against the relay
+  directory (and `*.db` files there are gitignored).
+- **Replaces the snapshot when enabled:** the rolling history normally persists its
+  5-minute window to `strike-history.json` so reconnecting maps start populated after a
+  restart. When the archive is enabled and opens cleanly, the history seeds that window
+  from the archive instead and the JSON snapshot is not written — the archive is the
+  authoritative record. If the archive is off (or fails to open), the snapshot is used
+  as before.
+
+### Schema
+
+One table, coordinates stored as integers scaled by **10000** (degrees × 1e4, ≈ 11 m —
+finer than Blitzortung's own accuracy) to keep rows small. Read a coordinate back as
+`value / 10000`.
+
+```sql
+CREATE TABLE strikes (
+  t   INTEGER NOT NULL,   -- ms since the Unix epoch
+  lat INTEGER NOT NULL,   -- latitude  * 10000
+  lon INTEGER NOT NULL    -- longitude * 10000
+);
+CREATE INDEX strikes_t ON strikes (t);   -- time-range queries
+```
+
+It's a plain SQLite file (WAL mode), so any SQLite tool can read it — even while the
+relay is writing. `PRAGMA user_version` is `1` for future schema changes.
+
+> **Growth:** the relay sees the whole worldwide feed (~1–2 million strikes/day). At
+> roughly 16 bytes per row plus the time index, expect on the order of tens of GB per
+> year — fine for an external SSD, but plan for it.
+
+### Querying
+
+`query-archive.js` opens the configured database read-only and answers common questions —
+a starting point for a visualization later:
+
+```bash
+node query-archive.js                                  # total + earliest/latest
+node query-archive.js --since 2026-06-01 --until 2026-06-13   # count in a time range
+node query-archive.js --box 39,-96,41,-94              # count in a bounding box
+node query-archive.js --box 39,-96,41,-94 --list       # ...and print each strike as JSON
+```
+
+`--box` takes `minLat,minLon,maxLat,maxLon`; `--since`/`--until` accept any ISO date/time
+and combine with `--box`.
 
 ## Deploy to the VPS
 

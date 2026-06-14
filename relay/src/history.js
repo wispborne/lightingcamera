@@ -17,7 +17,7 @@ export const DISPLAY_WINDOW_MS = 5 * 60 * 1000;
 // Relative snapshot paths resolve against the relay directory, same as config.
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-export function makeStrikeHistory({ windowMs, maxStrikes, snapshotPath, snapshotIntervalMs, log }) {
+export function makeStrikeHistory({ windowMs, maxStrikes, snapshotPath, snapshotIntervalMs, seedStrikes, log }) {
   const path = snapshotPath
     ? (isAbsolute(snapshotPath) ? snapshotPath : join(root, snapshotPath))
     : null;
@@ -35,7 +35,18 @@ export function makeStrikeHistory({ windowMs, maxStrikes, snapshotPath, snapshot
     if (strikes.length > maxStrikes) strikes.splice(0, strikes.length - maxStrikes);
   }
 
-  if (path && existsSync(path)) {
+  // When the archive is enabled it is the authoritative record, so it seeds the
+  // window directly and the JSON snapshot is skipped (caller passes snapshotPath
+  // null). Falls back to the snapshot when there's no archive.
+  if (Array.isArray(seedStrikes)) {
+    for (const s of seedStrikes) {
+      if (typeof s?.lat === 'number' && typeof s?.lon === 'number' && typeof s?.time === 'number') {
+        strikes.push({ lat: s.lat, lon: s.lon, time: s.time });
+      }
+    }
+    prune();
+    log?.info(`strike history: seeded ${strikes.length} strikes from archive`);
+  } else if (path && existsSync(path)) {
     try {
       const loaded = JSON.parse(readFileSync(path, 'utf8'));
       if (!Array.isArray(loaded)) throw new Error('not an array');

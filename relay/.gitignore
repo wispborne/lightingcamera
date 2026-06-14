@@ -5,3 +5,7 @@ config.json
 *.log
 strike-history.json
 strike-history.json.tmp
+# Strike archive database (when dbPath is relative/local; SSD paths are absolute).
+*.db
+*.db-wal
+*.db-shm

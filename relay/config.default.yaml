@@ -55,6 +55,21 @@ history:
   # How often (ms) to rewrite the snapshot while strikes are arriving.
   snapshotIntervalMs: 10000
 
+# Permanent archive of every recorded strike, written in batches to a single
+# SQLite database — separate from the rolling history above, which only keeps the
+# last few minutes. Off by default; needs Node 22.5+ (uses the built-in
+# node:sqlite). Querying is just SQL against the file; see relay/query-archive.js.
+archive:
+  enabled: false
+  # Where to keep the database. Use an absolute path on the external SSD, e.g.
+  # /mnt/ssd/lightning/strike-archive.db. A relative path resolves against the
+  # relay directory (and is gitignored).
+  dbPath: strike-archive.db
+  # Write buffered strikes at least this often (ms)...
+  flushIntervalMs: 5000
+  # ...or sooner once this many are buffered, whichever comes first.
+  batchSize: 1000
+
 # Bounding-box limits applied to every subscription.
 limits:
   # Largest radius (km) a client may request; bigger requests are clamped to this.
