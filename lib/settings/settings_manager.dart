@@ -302,11 +302,11 @@ class SettingsManager {
       ),
     );
     _strikeOverlayEnabled = signal(
-      prefs.getBool(_strikeOverlayEnabledKey) ?? false,
+      prefs.getBool(_strikeOverlayEnabledKey) ?? true,
     );
     _showStrikeInfo = signal(prefs.getBool(_showStrikeInfoKey) ?? true);
-    _miniMapEnabled = signal(prefs.getBool(_miniMapEnabledKey) ?? false);
-    _miniMapOpacity = signal(prefs.getDouble(_miniMapOpacityKey) ?? 0.8);
+    _miniMapEnabled = signal(prefs.getBool(_miniMapEnabledKey) ?? true);
+    _miniMapOpacity = signal(prefs.getDouble(_miniMapOpacityKey) ?? 0.4);
     _rainRadarEnabled = signal(prefs.getBool(_rainRadarEnabledKey) ?? true);
     _customRelayUrl = signal(prefs.getString(_customRelayUrlKey) ?? '');
     _relayKey = signal(prefs.getString(_relayKeyKey) ?? '');

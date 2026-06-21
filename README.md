@@ -126,9 +126,30 @@ fvm flutter build apk --release --split-per-abi --target-platform android-arm,an
 build/app/outputs/flutter-apk/app-<architecture>-release.apk
 ```
 
-Release builds are signed with the debug key (see
-[android/app/build.gradle.kts](android/app/build.gradle.kts)), so they're fine
-for personal use but not for the Play Store.
+### Signing
+
+Release builds use a stable signing key if you provide one, and otherwise fall
+back to the debug key. The debug key is per-machine, so APKs signed with it
+can't be updated across machines (and can't go on the Play Store) — for anything
+you distribute (e.g. via [Obtainium](#installing-with-obtainium)), set up a real
+key once:
+
+1. Generate a keystore (keep the `.jks` safe and backed up — losing it means you
+   can never update an installed copy):
+
+   ```powershell
+   keytool -genkey -v -keystore $env:USERPROFILE\lightningcamera-release.jks `
+     -keyalg RSA -keysize 2048 -validity 10000 -alias lightningcamera
+   ```
+
+2. Copy [android/key.properties.example](android/key.properties.example) to
+   `android/key.properties` (gitignored) and fill in your passwords, alias, and
+   the absolute path to the `.jks`.
+
+Release builds then sign with that key automatically. With no `key.properties`
+present, the build still works but uses the debug key (fine for quick local
+testing, not for distribution). See
+[android/app/build.gradle.kts](android/app/build.gradle.kts).
 
 To install on a connected device and launch it, from the project root:
 

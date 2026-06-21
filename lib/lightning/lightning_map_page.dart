@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:signals/signals_flutter.dart';
 
 import 'package:lightingcamera/lightning/lightning_service.dart';
 import 'package:lightingcamera/lightning/rain_radar_service.dart';
+import 'package:lightingcamera/main.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
 import 'package:lightingcamera/utils/logging.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
@@ -348,6 +350,11 @@ class _LightningMapPageState extends State<LightningMapPage> {
               icon: Icon(Symbols.tune, color: colors.onSurfaceVariant),
               onPressed: _showThunderTimingSheet,
             ),
+          IconButton(
+            tooltip: 'Settings',
+            icon: Icon(Icons.settings_outlined, color: colors.onSurfaceVariant),
+            onPressed: () => context.pushNamed(Pages.settings),
+          ),
         ],
       ),
       body: Stack(
