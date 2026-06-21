@@ -21,8 +21,9 @@ const String alertChannelName = 'Lightning alerts';
 const int monitoringNotificationId = 7001;
 const int alertNotificationId = 7002;
 
-/// How long after an alert before another qualifying strike makes noise again.
-const Duration _alertCooldown = Duration(minutes: 5);
+/// Payload set on the proximity alert notification. The main isolate reads it
+/// on tap to route to the lightning map instead of the default camera page.
+const String alertNotificationPayload = 'open_map';
 
 /// How much wider than the alert radius we subscribe to the relay, so strikes
 /// near the edge don't flap in and out of range as the user (or their GPS fix)
@@ -148,7 +149,11 @@ class _AlertMonitor {
     final last = _lastAlertTime;
     final lastDistance = _lastAlertDistanceKm;
 
-    final cooledDown = last == null || now.difference(last) >= _alertCooldown;
+    // The quiet period is user-configurable (minutes); convert to a Duration.
+    final cooldown = Duration(
+      milliseconds: (settingsManager.alertCooldownMinutes * 60000).round(),
+    );
+    final cooledDown = last == null || now.difference(last) >= cooldown;
     final muchCloser =
         lastDistance != null && distanceKm <= lastDistance / 2;
     final makeNoise = cooledDown || muchCloser;
@@ -188,6 +193,7 @@ class _AlertMonitor {
       title: 'Lightning nearby',
       body: body,
       notificationDetails: NotificationDetails(android: details),
+      payload: alertNotificationPayload,
     );
   }
 
@@ -265,6 +271,10 @@ class _AlertMonitor {
       );
       final radius = (data['radiusKm'] as num?)?.toDouble();
       if (radius != null) await settingsManager.setAlertRadiusKm(radius);
+      final cooldown = (data['cooldownMinutes'] as num?)?.toDouble();
+      if (cooldown != null) {
+        await settingsManager.setAlertCooldownMinutes(cooldown);
+      }
       final unitName = data['unitSystem'] as String?;
       if (unitName != null) {
         await settingsManager.setUnitSystem(

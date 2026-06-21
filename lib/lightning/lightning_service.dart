@@ -16,7 +16,12 @@ class Strike {
   final LatLng position;
   final DateTime time;
 
-  const Strike(this.position, this.time);
+  /// Upstream processing latency in seconds (strike → publish), forwarded from
+  /// Blitzortung's `delay`. Added to the strike's thunder-ring elapsed time so
+  /// each ring advances by its own latency. 0 for simulated or legacy strikes.
+  final double delaySeconds;
+
+  const Strike(this.position, this.time, {this.delaySeconds = 0});
 }
 
 /// Top-level singleton (same pattern as `imageCacheManager` / `settingsManager`).
@@ -87,6 +92,16 @@ class LightningService {
   /// for its own fresh GPS fix. Null until the first [acquire].
   LatLng? lastCenter;
 
+  /// Record the latest resolved center both in memory (for same-session reuse
+  /// via [lastCenter]) and persisted through [settingsManager], so a cold start
+  /// — e.g. opening the map from an alert notification — can still center on the
+  /// user's last known area. The write is fire-and-forget; persistence failures
+  /// only cost the next cold start its head start.
+  void _rememberCenter(LatLng center) {
+    lastCenter = center;
+    settingsManager.setLastMapCenter(center.latitude, center.longitude);
+  }
+
   final Signal<bool> _connected = signal(false);
   ReadonlySignal<bool> get connected => _connected;
 
@@ -128,7 +143,7 @@ class LightningService {
   /// wins — both pages use the same device GPS, so they're effectively equal).
   void acquire(LatLng center, {double radiusKm = defaultRadiusKm}) {
     _ensureCredentialWatch();
-    lastCenter = center;
+    _rememberCenter(center);
     if (_refCount == 0) {
       connect(center, radiusKm: radiusKm);
     }
@@ -345,10 +360,12 @@ class LightningService {
           final lon = entry['lon'];
           final time = entry['time'];
           if (lat is! num || lon is! num || time is! num) continue;
+          final delay = entry['delay'];
           strikes.add(
             Strike(
               LatLng(lat.toDouble(), lon.toDouble()),
               DateTime.fromMillisecondsSinceEpoch(time.toInt()),
+              delaySeconds: delay is num ? delay.toDouble() : 0,
             ),
           );
         }
@@ -365,7 +382,14 @@ class LightningService {
         final time = DateTime.fromMillisecondsSinceEpoch(
           (map['time'] as num).toInt(),
         );
-        _addStrike(Strike(LatLng(lat, lon), time));
+        final delay = map['delay'];
+        _addStrike(
+          Strike(
+            LatLng(lat, lon),
+            time,
+            delaySeconds: delay is num ? delay.toDouble() : 0,
+          ),
+        );
         _prune();
         return;
       }
@@ -460,7 +484,7 @@ class LightningService {
   /// small movements don't churn the subscription. Safe to call before the auth
   /// ack: the new center is picked up when the subscription is next sent.
   void updateCenter(LatLng center) {
-    lastCenter = center;
+    _rememberCenter(center);
     final current = _center;
     if (current != null &&
         _distance.as(LengthUnit.Kilometer, current, center) <

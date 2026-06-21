@@ -41,7 +41,7 @@ export function makeStrikeHistory({ windowMs, maxStrikes, snapshotPath, snapshot
   if (Array.isArray(seedStrikes)) {
     for (const s of seedStrikes) {
       if (typeof s?.lat === 'number' && typeof s?.lon === 'number' && typeof s?.time === 'number') {
-        strikes.push({ lat: s.lat, lon: s.lon, time: s.time });
+        strikes.push({ lat: s.lat, lon: s.lon, time: s.time, delay: typeof s.delay === 'number' ? s.delay : 0 });
       }
     }
     prune();
@@ -52,7 +52,7 @@ export function makeStrikeHistory({ windowMs, maxStrikes, snapshotPath, snapshot
       if (!Array.isArray(loaded)) throw new Error('not an array');
       for (const s of loaded) {
         if (typeof s?.lat === 'number' && typeof s?.lon === 'number' && typeof s?.time === 'number') {
-          strikes.push({ lat: s.lat, lon: s.lon, time: s.time });
+          strikes.push({ lat: s.lat, lon: s.lon, time: s.time, delay: typeof s.delay === 'number' ? s.delay : 0 });
         }
       }
       prune();

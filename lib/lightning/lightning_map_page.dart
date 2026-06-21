@@ -37,9 +37,11 @@ class _LightningMapPageState extends State<LightningMapPage> {
   @override
   void initState() {
     super.initState();
-    // Reuse the location the camera page already resolved, if any, so the map
-    // opens in the right place on the first frame instead of at the fallback.
-    _userLocation = lightningService.lastCenter;
+    // Reuse the location the camera page already resolved this session, or the
+    // last one we persisted, so the map opens in the right place on the first
+    // frame instead of at the fallback — even on a cold start from a
+    // notification, before any fresh GPS fix arrives.
+    _userLocation = lightningService.lastCenter ?? _cachedCenter();
     rainRadarService.acquire();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
@@ -48,9 +50,11 @@ class _LightningMapPageState extends State<LightningMapPage> {
   }
 
   Future<void> _init() async {
-    // If the camera page already resolved a location, the map is centered on it
-    // via initialCenter (seeded in initState) — just open the relay connection.
-    final known = lightningService.lastCenter;
+    // If we already have a location for this session or a cached one from a
+    // previous run, the map is centered on it via initialCenter (seeded in
+    // initState) — just open the relay connection there. The relay's own
+    // location stream and the recenter button refine it from here.
+    final known = lightningService.lastCenter ?? _cachedCenter();
     if (known != null) {
       lightningService.acquire(known);
       return;
@@ -64,6 +68,16 @@ class _LightningMapPageState extends State<LightningMapPage> {
     setState(() => _userLocation = center);
     _mapController.move(center, _defaultZoom);
     lightningService.acquire(center);
+  }
+
+  /// The last map center we persisted, or null if the map has never resolved a
+  /// location before. Used to open on the user's last known area on a cold
+  /// start, before any fresh GPS fix is available.
+  LatLng? _cachedCenter() {
+    final lat = settingsManager.lastMapLatitude;
+    final lon = settingsManager.lastMapLongitude;
+    if (lat == null || lon == null) return null;
+    return LatLng(lat, lon);
   }
 
   /// Returns the user's position, or null if it couldn't be resolved (with
@@ -182,9 +196,17 @@ class _LightningMapPageState extends State<LightningMapPage> {
     final colors = Theme.of(context).colorScheme;
     final circles = <CircleMarker>[];
     final now = DateTime.now();
+    // Advance every ring by the user's lead so it reaches them as early as the
+    // real thunder does (see SettingsManager.thunderLeadSeconds).
+    final lead = settingsManager.thunderLeadSeconds;
 
     for (final strike in lightningService.strikes.value) {
-      final elapsedSeconds = now.difference(strike.time).inMilliseconds / 1000;
+      // Each ring also advances by the strike's own upstream delay, on top of
+      // the shared manual lead.
+      final elapsedSeconds =
+          now.difference(strike.time).inMilliseconds / 1000 +
+          lead +
+          strike.delaySeconds;
       final radius = _speedOfSoundMps * elapsedSeconds;
       if (radius <= 0 || radius > _thunderMaxRadiusMeters) continue;
 
@@ -201,6 +223,62 @@ class _LightningMapPageState extends State<LightningMapPage> {
       );
     }
     return circles;
+  }
+
+  /// A small sheet to tune how far ahead the thunder rings run, so the ring
+  /// reaches the user when the thunder actually does (see
+  /// SettingsManager.thunderLeadSeconds).
+  void _showThunderTimingSheet() {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        var pending = settingsManager.thunderLeadSeconds;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            child: StatefulBuilder(
+              builder: (context, setSheetState) {
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  spacing: 8,
+                  children: [
+                    Text('Thunder timing', style: text.titleMedium),
+                    Text(
+                      'Thunder usually arrives a little before the ring reaches '
+                      'you, because a bolt is a long channel whose nearest point '
+                      'is closer than the plotted strike. Nudge the rings outward '
+                      'to match what you hear.',
+                      style: text.bodySmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                    Text(
+                      pending == 0 ? 'No lead' : 'Lead ${pending.round()} s',
+                      style: text.bodyMedium,
+                    ),
+                    Slider(
+                      value: pending,
+                      max: SettingsManager.maxThunderLeadSeconds,
+                      divisions: SettingsManager.maxThunderLeadSeconds.round(),
+                      label: '${pending.round()} s',
+                      onChanged: (v) => setSheetState(() => pending = v),
+                      onChangeEnd: (v) async {
+                        await settingsManager.setThunderLeadSeconds(v);
+                        if (mounted) setState(() {});
+                      },
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -264,6 +342,12 @@ class _LightningMapPageState extends State<LightningMapPage> {
               setState(() {});
             },
           ),
+          if (showThunder)
+            IconButton(
+              tooltip: 'Adjust thunder timing',
+              icon: Icon(Symbols.tune, color: colors.onSurfaceVariant),
+              onPressed: _showThunderTimingSheet,
+            ),
         ],
       ),
       body: Stack(

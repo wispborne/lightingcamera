@@ -57,8 +57,10 @@ export function parseStrikeMessage(raw) {
 /**
  * Normalize a parsed Blitzortung strike into the shape we forward to clients.
  * Blitzortung `time` is nanoseconds since the Unix epoch; we emit milliseconds.
+ * `delay` is the upstream processing latency in seconds (strike -> publish); the
+ * app adds it to each strike's thunder-ring elapsed time.
  * @param {object} strike
- * @returns {{lat:number, lon:number, time:number}|null}
+ * @returns {{lat:number, lon:number, time:number, delay:number}|null}
  */
 export function normalizeStrike(strike) {
   if (!strike || typeof strike.lat !== 'number' || typeof strike.lon !== 'number') {
@@ -67,5 +69,8 @@ export function normalizeStrike(strike) {
   // time is in nanoseconds; convert to ms. Guard against missing/odd values.
   const timeMs =
     typeof strike.time === 'number' ? Math.round(strike.time / 1e6) : Date.now();
-  return { lat: strike.lat, lon: strike.lon, time: timeMs };
+  // delay is already in seconds; clamp out missing/negative values to 0.
+  const delay =
+    typeof strike.delay === 'number' && strike.delay > 0 ? strike.delay : 0;
+  return { lat: strike.lat, lon: strike.lon, time: timeMs, delay };
 }

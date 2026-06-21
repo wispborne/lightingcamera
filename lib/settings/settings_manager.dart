@@ -22,6 +22,7 @@ class SettingsManager {
   static const _shutterOffsetXKey = 'shutter_offset_x';
   static const _lightningTestModeKey = 'lightning_test_mode';
   static const _showThunderCirclesKey = 'show_thunder_circles';
+  static const _thunderLeadSecondsKey = 'thunder_lead_seconds';
   static const _strikeOverlayEnabledKey = 'strike_overlay_enabled';
   static const _showStrikeInfoKey = 'show_strike_info';
   static const _miniMapEnabledKey = 'mini_map_enabled';
@@ -45,10 +46,18 @@ class SettingsManager {
   static const _galleryCrossAxisCountKey = 'gallery_cross_axis_count';
   static const _lightningAlertsEnabledKey = 'lightning_alerts_enabled';
   static const _alertRadiusKmKey = 'alert_radius_km';
+  static const _alertCooldownMinutesKey = 'alert_cooldown_minutes';
+  static const _lastMapLatKey = 'last_map_lat';
+  static const _lastMapLonKey = 'last_map_lon';
 
   /// Default radius for proximity alerts, in kilometres. Bounded by the same
   /// [minStrikeDistanceKm]/[maxStrikeDistanceKm] range the overlay filter uses.
   static const double defaultAlertRadiusKm = 15;
+
+  /// Bounds for the quiet period between proximity alerts, in minutes.
+  static const double minAlertCooldownMinutes = 1;
+  static const double maxAlertCooldownMinutes = 30;
+  static const double defaultAlertCooldownMinutes = 2;
 
   /// Bounds for the overlay's maximum strike distance, in kilometres.
   static const double minStrikeDistanceKm = 5;
@@ -97,6 +106,16 @@ class SettingsManager {
   late final Signal<bool> _showThunderCircles;
   ReadonlySignal<bool> get showThunderCirclesSignal => _showThunderCircles;
   bool get showThunderCircles => _showThunderCircles.value;
+
+  /// Seconds to advance the thunder rings, compensating for thunder arriving
+  /// earlier than a point-source circle predicts: real flashes are kilometres-
+  /// long channels, so the nearest part of the bolt — and the thunder you hear
+  /// first — is closer than Blitzortung's single located point. Added to each
+  /// ring's elapsed time so the ring reaches you a touch sooner. 0 = no lead.
+  static const double maxThunderLeadSeconds = 30;
+  late final Signal<double> _thunderLeadSeconds;
+  ReadonlySignal<double> get thunderLeadSecondsSignal => _thunderLeadSeconds;
+  double get thunderLeadSeconds => _thunderLeadSeconds.value;
 
   /// When on, the camera page overlays recent strikes on the live feed, anchored
   /// to their real-world direction. Off by default — it needs location and
@@ -238,6 +257,23 @@ class SettingsManager {
   ReadonlySignal<double> get alertRadiusKmSignal => _alertRadiusKm;
   double get alertRadiusKm => _alertRadiusKm.value;
 
+  /// How long after a proximity alert before another in-range strike makes a
+  /// sound again, in minutes. A markedly closer strike still alerts right away
+  /// (see the alert service). Clamped to
+  /// [minAlertCooldownMinutes]–[maxAlertCooldownMinutes].
+  late final Signal<double> _alertCooldownMinutes;
+  ReadonlySignal<double> get alertCooldownMinutesSignal => _alertCooldownMinutes;
+  double get alertCooldownMinutes => _alertCooldownMinutes.value;
+
+  /// The latitude/longitude the map was last centered on, persisted so a cold
+  /// start — including opening the map straight from an alert notification —
+  /// can still open on the user's last known area instead of the world view.
+  /// Null until the map has resolved a location at least once.
+  double? _lastMapLat;
+  double? _lastMapLon;
+  double? get lastMapLatitude => _lastMapLat;
+  double? get lastMapLongitude => _lastMapLon;
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     // Per-orientation shutter positions. The X for each orientation falls back
@@ -259,6 +295,12 @@ class SettingsManager {
     _isRepositioning = signal(false);
     _lightningTestMode = signal(prefs.getBool(_lightningTestModeKey) ?? false);
     _showThunderCircles = signal(prefs.getBool(_showThunderCirclesKey) ?? true);
+    _thunderLeadSeconds = signal(
+      (prefs.getDouble(_thunderLeadSecondsKey) ?? 0).clamp(
+        0,
+        maxThunderLeadSeconds,
+      ),
+    );
     _strikeOverlayEnabled = signal(
       prefs.getBool(_strikeOverlayEnabledKey) ?? false,
     );
@@ -316,6 +358,14 @@ class SettingsManager {
     _alertRadiusKm = signal(
       storedRadius.clamp(minStrikeDistanceKm, maxStrikeDistanceKm),
     );
+    final storedCooldown =
+        prefs.getDouble(_alertCooldownMinutesKey) ??
+        defaultAlertCooldownMinutes;
+    _alertCooldownMinutes = signal(
+      storedCooldown.clamp(minAlertCooldownMinutes, maxAlertCooldownMinutes),
+    );
+    _lastMapLat = prefs.getDouble(_lastMapLatKey);
+    _lastMapLon = prefs.getDouble(_lastMapLonKey);
   }
 
   Future<void> setShutterOffset(
@@ -348,6 +398,13 @@ class SettingsManager {
     _showThunderCircles.value = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_showThunderCirclesKey, enabled);
+  }
+
+  Future<void> setThunderLeadSeconds(double seconds) async {
+    final clamped = seconds.clamp(0.0, maxThunderLeadSeconds);
+    _thunderLeadSeconds.value = clamped;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_thunderLeadSecondsKey, clamped);
   }
 
   Future<void> setStrikeOverlayEnabled(bool enabled) async {
@@ -486,6 +543,28 @@ class SettingsManager {
     _alertRadiusKm.value = km.clamp(minStrikeDistanceKm, maxStrikeDistanceKm);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_alertRadiusKmKey, _alertRadiusKm.value);
+  }
+
+  Future<void> setAlertCooldownMinutes(double minutes) async {
+    _alertCooldownMinutes.value = minutes.clamp(
+      minAlertCooldownMinutes,
+      maxAlertCooldownMinutes,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(
+      _alertCooldownMinutesKey,
+      _alertCooldownMinutes.value,
+    );
+  }
+
+  /// Remember the map center for the next cold start. Called from the lightning
+  /// service as the resolved location moves.
+  Future<void> setLastMapCenter(double latitude, double longitude) async {
+    _lastMapLat = latitude;
+    _lastMapLon = longitude;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_lastMapLatKey, latitude);
+    await prefs.setDouble(_lastMapLonKey, longitude);
   }
 
   void enterRepositionMode() {

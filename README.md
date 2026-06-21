@@ -25,6 +25,38 @@ distance, and when its thunder will arrive.
 - **Test mode** — a built-in storm simulator for trying the map and overlays
   without a live storm.
 
+## Installing with Obtainium
+
+[Obtainium](https://github.com/ImranR98/Obtainium) installs the app straight
+from this repo's [GitHub releases](https://github.com/wispborne/lightningcamera/releases)
+and keeps it updated — no app store needed.
+
+**Quickest way:** in Obtainium, tap **Add App** and paste the repo URL:
+
+```
+https://github.com/wispborne/lightningcamera
+```
+
+Releases are split by CPU architecture, so each one carries several APKs. Leave
+Obtainium's **"Try to filter APKs by CPU architecture"** setting on (it's on by
+default) and it picks the right one for your phone automatically. If you ever
+need to force it, set the APK filter to `arm64-v8a` (most modern phones).
+
+**Or import a ready-made profile:** save the JSON below to a file and use
+Obtainium's **Import/Export → Import from JSON**.
+
+```json
+{
+  "id": "com.wisp.lightingcamera",
+  "url": "https://github.com/wispborne/lightningcamera",
+  "author": "wispborne",
+  "name": "Lightning Camera",
+  "preferredApkIndex": 0,
+  "additionalSettings": "{\"autoApkFilterByArch\":true,\"fallbackToOlderReleases\":true}",
+  "overrideSource": "GitHub"
+}
+```
+
 ## How it's put together
 
 ```

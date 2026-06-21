@@ -10,6 +10,18 @@ const DISPLAY_WINDOW_MS = 5 * 60 * 1000;
 const MIN_OPACITY = 0.05;
 const SPEED_OF_SOUND_MPS = 343;
 const THUNDER_MAX_RADIUS_M = 15 * 1609.344; // 15 miles
+const MAX_THUNDER_LEAD_S = 30;
+
+// Seconds to advance the thunder rings (mirrors SettingsManager.thunderLeadSeconds
+// in the app). Real flashes are kilometres-long channels, so the thunder you hear
+// first comes from the nearest part of the bolt, closer than the single located
+// point — this nudges the ring out to meet it. Tune from the console with
+// localStorage.setItem('thunderLeadS', '10'); takes effect on the next tick.
+function thunderLeadS() {
+  const raw = Number(localStorage.getItem('thunderLeadS'));
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(raw, MAX_THUNDER_LEAD_S);
+}
 const GLOW_AGE_MS = 30 * 1000; // strikes younger than this get a glow halo
 
 const EARTH_CIRCUMFERENCE_M = 40075016.686;
@@ -92,7 +104,10 @@ function redraw() {
     let thunderRadiusPx = 0;
     let thunderRadiusM = 0;
     if (thunderEnabled) {
-      const radiusM = SPEED_OF_SOUND_MPS * (ageMs / 1000);
+      // Advance by the shared manual lead plus this strike's own upstream delay.
+      const delayS = typeof strike.delay === 'number' ? strike.delay : 0;
+      const radiusM =
+        SPEED_OF_SOUND_MPS * (ageMs / 1000 + thunderLeadS() + delayS);
       if (radiusM > 0 && radiusM <= THUNDER_MAX_RADIUS_M) {
         thunderRadiusM = radiusM;
         thunderRadiusPx = radiusM / metersPerPixel(strike.lat);

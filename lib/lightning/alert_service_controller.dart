@@ -109,6 +109,7 @@ class AlertServiceController {
       'relayUrl': settingsManager.customRelayUrl,
       'testMode': settingsManager.lightningTestMode,
       'radiusKm': settingsManager.alertRadiusKm,
+      'cooldownMinutes': settingsManager.alertCooldownMinutes,
       'unitSystem': settingsManager.unitSystem.name,
     });
   }

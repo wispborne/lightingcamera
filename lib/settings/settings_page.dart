@@ -202,6 +202,20 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// A section heading in the settings list — a small primary-coloured label
+  /// with consistent spacing above and below, used to group related settings.
+  Widget _sectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Text(
+        title,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: Theme.of(context).colorScheme.primary,
+            ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -213,6 +227,9 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
       body: ListView(
         children: [
+          // ── Camera ──────────────────────────────────────────────────────
+          // Everything about capturing and processing the phone's own frames.
+          _sectionHeader('Camera'),
           ListTile(
             title: const Text('Shutter button position'),
             subtitle: const Text('Tap to reposition on camera view'),
@@ -222,7 +239,7 @@ class _SettingsPageState extends State<SettingsPage> {
               context.pop();
             },
           ),
-          Watch((context) {
+          SignalBuilder(builder: (context) {
             final aspect = settingsManager.captureAspectSignal.value;
             return ListTile(
               title: const Text('Capture shape'),
@@ -265,6 +282,38 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           SignalBuilder(builder: (context) {
+            final threshold = settingsManager.lightningThresholdSignal.value;
+            return ListTile(
+              title: const Text('Lightning sensitivity'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'How sure the detector must be to flag a captured frame as '
+                    'lightning. Lower catches faint bolts (and more false '
+                    'alarms); higher keeps only obvious strikes.',
+                  ),
+                  Slider(
+                    value: threshold,
+                    min: SettingsManager.minLightningThreshold,
+                    max: SettingsManager.maxLightningThreshold,
+                    divisions:
+                        ((SettingsManager.maxLightningThreshold -
+                                    SettingsManager.minLightningThreshold) *
+                                20)
+                            .round(),
+                    label: '${(threshold * 100).round()}%',
+                    onChanged: settingsManager.setLightningThreshold,
+                  ),
+                ],
+              ),
+              trailing: Text('${(threshold * 100).round()}%'),
+            );
+          }),
+
+          // ── Display ─────────────────────────────────────────────────────
+          _sectionHeader('Display'),
+          SignalBuilder(builder: (context) {
             final units = settingsManager.unitSystemSignal.value;
             return ListTile(
               title: const Text('Distance units'),
@@ -298,22 +347,12 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             );
           }),
-          Watch(
-            (context) => SwitchListTile(
-              title: const Text('Lightning test mode'),
-              subtitle: const Text(
-                'Simulate strikes every 5 seconds instead of using the relay. '
-                'Reopen the map to apply.',
-              ),
-              value: settingsManager.lightningTestModeSignal.value,
-              onChanged: (value) {
-                settingsManager.setLightningTestMode(value);
-                alertServiceController.notifySettingsChanged();
-              },
-            ),
-          ),
-          Watch(
-            (context) => SwitchListTile(
+
+          // ── Lightning overlay ───────────────────────────────────────────
+          // Real-world strikes shown on top of the live camera feed.
+          _sectionHeader('Lightning overlay'),
+          SignalBuilder(
+            builder: (context) => SwitchListTile(
               title: const Text('Strike overlay'),
               subtitle: const Text(
                 'Show recent strikes over the camera, pinned to their real-world '
@@ -323,8 +362,8 @@ class _SettingsPageState extends State<SettingsPage> {
               onChanged: settingsManager.setStrikeOverlayEnabled,
             ),
           ),
-          Watch(
-            (context) => SwitchListTile(
+          SignalBuilder(
+            builder: (context) => SwitchListTile(
               title: const Text('Strike info labels'),
               subtitle: const Text(
                 'Show distance and thunder arrival time next to each strike '
@@ -367,37 +406,8 @@ class _SettingsPageState extends State<SettingsPage> {
               trailing: Text('${distance.round()} km'),
             );
           }),
-          SignalBuilder(builder: (context) {
-            final threshold = settingsManager.lightningThresholdSignal.value;
-            return ListTile(
-              title: const Text('Lightning sensitivity'),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'How sure the detector must be to flag a captured frame as '
-                    'lightning. Lower catches faint bolts (and more false '
-                    'alarms); higher keeps only obvious strikes.',
-                  ),
-                  Slider(
-                    value: threshold,
-                    min: SettingsManager.minLightningThreshold,
-                    max: SettingsManager.maxLightningThreshold,
-                    divisions:
-                        ((SettingsManager.maxLightningThreshold -
-                                    SettingsManager.minLightningThreshold) *
-                                20)
-                            .round(),
-                    label: '${(threshold * 100).round()}%',
-                    onChanged: settingsManager.setLightningThreshold,
-                  ),
-                ],
-              ),
-              trailing: Text('${(threshold * 100).round()}%'),
-            );
-          }),
-          Watch(
-            (context) => SwitchListTile(
+          SignalBuilder(
+            builder: (context) => SwitchListTile(
               title: const Text('Mini map'),
               subtitle: const Text(
                 'Show a small live lightning map in the top-left of the camera. '
@@ -407,7 +417,7 @@ class _SettingsPageState extends State<SettingsPage> {
               onChanged: settingsManager.setMiniMapEnabled,
             ),
           ),
-          Watch((context) {
+          SignalBuilder(builder: (context) {
             final enabled = settingsManager.miniMapEnabledSignal.value;
             final opacity = settingsManager.miniMapOpacitySignal.value;
             return ListTile(
@@ -424,16 +434,95 @@ class _SettingsPageState extends State<SettingsPage> {
               trailing: Text('${(opacity * 100).round()}%'),
             );
           }),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'Lightning relay',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: colorScheme.primary,
-                  ),
+
+          // ── Alerts ──────────────────────────────────────────────────────
+          _sectionHeader('Alerts'),
+          SignalBuilder(
+            builder: (context) => SwitchListTile(
+              title: const Text('Lightning alerts'),
+              subtitle: const Text(
+                'Notify me when lightning strikes nearby, even with the app '
+                'closed. Runs a background service and uses location.',
+              ),
+              value: settingsManager.lightningAlertsEnabledSignal.value,
+              onChanged: _toggleAlerts,
             ),
           ),
+          SignalBuilder(builder: (context) {
+            final enabled = settingsManager.lightningAlertsEnabledSignal.value;
+            final radius = settingsManager.alertRadiusKmSignal.value;
+            final units = settingsManager.unitSystemSignal.value;
+            final label = formatDistanceKm(radius, units);
+            return ListTile(
+              enabled: enabled,
+              title: const Text('Alert radius'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Alert me only when a strike lands this close. This is '
+                    'separate from the overlay\'s display distance.',
+                  ),
+                  Slider(
+                    value: radius,
+                    min: SettingsManager.minStrikeDistanceKm,
+                    max: SettingsManager.maxStrikeDistanceKm,
+                    divisions:
+                        (SettingsManager.maxStrikeDistanceKm -
+                                SettingsManager.minStrikeDistanceKm)
+                            ~/ 5,
+                    label: label,
+                    onChanged: enabled
+                        ? (value) {
+                            settingsManager.setAlertRadiusKm(value);
+                            alertServiceController.notifySettingsChanged();
+                          }
+                        : null,
+                  ),
+                ],
+              ),
+              trailing: Text(label),
+            );
+          }),
+          SignalBuilder(builder: (context) {
+            final enabled = settingsManager.lightningAlertsEnabledSignal.value;
+            final minutes = settingsManager.alertCooldownMinutesSignal.value;
+            final label = '${minutes.round()} min';
+            return ListTile(
+              enabled: enabled,
+              title: const Text('Alert cooldown'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Quiet time after an alert before another nearby strike '
+                    'sounds again. A much closer strike still alerts right away.',
+                  ),
+                  Slider(
+                    value: minutes,
+                    min: SettingsManager.minAlertCooldownMinutes,
+                    max: SettingsManager.maxAlertCooldownMinutes,
+                    divisions:
+                        (SettingsManager.maxAlertCooldownMinutes -
+                                SettingsManager.minAlertCooldownMinutes)
+                            .round(),
+                    label: label,
+                    onChanged: enabled
+                        ? (value) {
+                            settingsManager.setAlertCooldownMinutes(value);
+                            alertServiceController.notifySettingsChanged();
+                          }
+                        : null,
+                  ),
+                ],
+              ),
+              trailing: Text(label),
+            );
+          }),
+
+          // ── Relay ───────────────────────────────────────────────────────
+          // Where strike data comes from, plus the test-mode simulator.
+          _sectionHeader('Relay'),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: _buildRelayUrlField(context),
@@ -519,63 +608,20 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
               ),
             ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'Alerts',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: colorScheme.primary,
-                  ),
-            ),
-          ),
           SignalBuilder(
             builder: (context) => SwitchListTile(
-              title: const Text('Lightning alerts'),
+              title: const Text('Lightning test mode'),
               subtitle: const Text(
-                'Notify me when lightning strikes nearby, even with the app '
-                'closed. Runs a background service and uses location.',
+                'Simulate strikes every 5 seconds instead of using the relay. '
+                'Reopen the map to apply.',
               ),
-              value: settingsManager.lightningAlertsEnabledSignal.value,
-              onChanged: _toggleAlerts,
+              value: settingsManager.lightningTestModeSignal.value,
+              onChanged: (value) {
+                settingsManager.setLightningTestMode(value);
+                alertServiceController.notifySettingsChanged();
+              },
             ),
           ),
-          SignalBuilder(builder: (context) {
-            final enabled = settingsManager.lightningAlertsEnabledSignal.value;
-            final radius = settingsManager.alertRadiusKmSignal.value;
-            final units = settingsManager.unitSystemSignal.value;
-            final label = formatDistanceKm(radius, units);
-            return ListTile(
-              enabled: enabled,
-              title: const Text('Alert radius'),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Alert me only when a strike lands this close. This is '
-                    'separate from the overlay\'s display distance.',
-                  ),
-                  Slider(
-                    value: radius,
-                    min: SettingsManager.minStrikeDistanceKm,
-                    max: SettingsManager.maxStrikeDistanceKm,
-                    divisions:
-                        (SettingsManager.maxStrikeDistanceKm -
-                                SettingsManager.minStrikeDistanceKm)
-                            ~/ 5,
-                    label: label,
-                    onChanged: enabled
-                        ? (value) {
-                            settingsManager.setAlertRadiusKm(value);
-                            alertServiceController.notifySettingsChanged();
-                          }
-                        : null,
-                  ),
-                ],
-              ),
-              trailing: Text(label),
-            );
-          }),
           const SizedBox(height: 16),
         ],
       ),

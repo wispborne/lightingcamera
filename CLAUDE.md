@@ -100,7 +100,23 @@ relay/
   ones, adds to `history`, then broadcasts to `server` (app clients) and `web` (map). The
   upstream stays connected for the relay's whole lifetime, so `history` keeps filling even
   with no clients — a freshly opened map is already populated.
-- **Strike shape:** `{ "type": "strike", "lat": <deg>, "lon": <deg>, "time": <ms epoch> }`.
+- **Strike shape (what we forward):** `{ "type": "strike", "lat": <deg>, "lon": <deg>, "time": <ms epoch>, "delay": <seconds> }`.
+  `decode.js normalizeStrike` strips the upstream message down to this; everything else below is discarded.
+- **Raw Blitzortung wire format (upstream, confirmed from a live capture):** each strike decodes to
+  these top-level keys —
+  - `time` — **true strike time, in nanoseconds** since epoch (we ÷1e6 → ms). Not a receive time.
+  - `lat`, `lon` — located position (deg). `alt` — altitude (m, usually 0).
+  - `pol` — polarity. `mds`, `mcg` — signal strength / quality metrics. `status`, `region` — bookkeeping.
+  - `sig` — array of detecting stations, each `{ sta (id), time (ns detection offset), lat, lon, alt, status }`.
+    Often 30+ stations; the richest discarded field (could inform location uncertainty, but unused).
+  - `delay` — **data/processing latency in seconds** (strike → publish). This is the "Delay" shown on
+    lightningmaps.org. A live capture showed `delay: 3.1` matching an independently measured ~3.2s pipeline
+    age — confirming `time` is the true strike instant. We forward it and **add it per-strike to each
+    thunder ring's elapsed time** (on top of the shared manual lead, `SettingsManager.thunderLeadSeconds`).
+    Note this is a deliberate product choice, not strictly physical: the ring already keys off the true
+    `time` and self-corrects for latency on arrival, so adding `delay` advances each ring by an extra ~3s.
+  - `lonc`, `latc` — bookkeeping (0 in capture).
+  - Probe the live format any time with `node dump-strike.js` (mirrors `spike.js`).
 - **App protocol:** client connects, sends `{ "auth": "<key>" }` as the **first** message
   (relay acks or closes with `4001`), then `{ "lat", "lon", "radiusKm" }` to set/move its
   box. Relay streams matching strikes. Keepalive: ws-level ping + app-level
