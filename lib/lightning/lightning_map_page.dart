@@ -305,12 +305,12 @@ class _LightningMapPageState extends State<LightningMapPage> {
       Color statusColor,
       IconData statusIcon,
     ) = settingsManager.lightningTestMode
-        ? ('Simulated (test mode)', colors.tertiary, Icons.science_outlined)
+        ? ('Simulated (test mode)', colors.tertiary, Icons.science)
         : noKey
-        ? ('No relay key', colors.onSurfaceVariant, Icons.key_off_outlined)
+        ? ('No relay key', colors.onSurfaceVariant, Icons.key_off)
         : connected
-        ? ('Connected', colors.primary, Icons.cloud_done_outlined)
-        : ('Disconnected', colors.error, Icons.cloud_off_outlined);
+        ? ('Connected', colors.primary, Icons.cloud_done)
+        : ('Disconnected', colors.error, Icons.cloud_off);
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -322,6 +322,7 @@ class _LightningMapPageState extends State<LightningMapPage> {
             tooltip: showRadar ? 'Hide rain radar' : 'Show rain radar',
             icon: Icon(
               Symbols.rainy,
+              fill: 1,
               color: showRadar
                   ? colors.primary
                   : colors.onSurfaceVariant.withAlpha(150),
@@ -336,8 +337,11 @@ class _LightningMapPageState extends State<LightningMapPage> {
                 ? 'Hide thunder circles'
                 : 'Show thunder circles',
             icon: Icon(
-              showThunder ? Symbols.lightning_stand : Symbols.lightning_stand,
-              color: showThunder ? colors.primary : colors.onSurfaceVariant.withAlpha(150),
+              Symbols.lightning_stand,
+              fill: 1,
+              color: showThunder
+                  ? colors.primary
+                  : colors.onSurfaceVariant.withAlpha(150),
             ),
             onPressed: () async {
               await settingsManager.setShowThunderCircles(!showThunder);
@@ -347,12 +351,12 @@ class _LightningMapPageState extends State<LightningMapPage> {
           if (showThunder)
             IconButton(
               tooltip: 'Adjust thunder timing',
-              icon: Icon(Symbols.tune, color: colors.onSurfaceVariant),
+              icon: Icon(Symbols.tune, fill: 1, color: colors.onSurfaceVariant),
               onPressed: _showThunderTimingSheet,
             ),
           IconButton(
             tooltip: 'Settings',
-            icon: Icon(Icons.settings_outlined, color: colors.onSurfaceVariant),
+            icon: Icon(Icons.settings, color: colors.onSurfaceVariant),
             onPressed: () => context.pushNamed(Pages.settings),
           ),
         ],
