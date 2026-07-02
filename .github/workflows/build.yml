@@ -41,12 +41,23 @@ jobs:
           storeFile=$RUNNER_TEMP/release.jks
           EOF
 
+      - name: Work out the version
+        id: version
+        # Take the "major.minor" (e.g. 1.0) from pubspec.yaml and use the CI run
+        # number as the patch, giving an always-rising version like 1.0.34.
+        # Bump the major/minor later by editing pubspec.yaml.
+        run: |
+          base=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1)
+          major_minor=$(echo "$base" | cut -d. -f1,2)
+          echo "name=${major_minor}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
       - name: Build APK (arm64-v8a only)
-        # Version name (e.g. 1.0.0) comes from pubspec.yaml.
-        # Build code is set from the CI run number so it always goes up,
-        # which Android needs to treat each new APK as an upgrade.
+        # Version name is stamped from the step above; build code is the run
+        # number so it always goes up, which Android needs to treat each new
+        # APK as an upgrade.
         run: >
           flutter build apk --release --target-platform android-arm64
+          --build-name=${{ steps.version.outputs.name }}
           --build-number=${{ github.run_number }}
 
       - uses: actions/upload-artifact@v4
@@ -57,8 +68,8 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Build ${{ github.run_number }}
+          tag_name: v${{ steps.version.outputs.name }}
+          name: v${{ steps.version.outputs.name }}
           body: |
-            Automated release from commit ${{ github.sha }}.
+            Version ${{ steps.version.outputs.name }} — automated release from commit ${{ github.sha }}.
           files: build/app/outputs/flutter-apk/app-release.apk
