@@ -42,7 +42,12 @@ jobs:
           EOF
 
       - name: Build APK (arm64-v8a only)
-        run: flutter build apk --release --target-platform android-arm64
+        # Version name (e.g. 1.0.0) comes from pubspec.yaml.
+        # Build code is set from the CI run number so it always goes up,
+        # which Android needs to treat each new APK as an upgrade.
+        run: >
+          flutter build apk --release --target-platform android-arm64
+          --build-number=${{ github.run_number }}
 
       - uses: actions/upload-artifact@v4
         with:
