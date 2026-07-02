@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
@@ -67,6 +68,11 @@ class CameraPageState extends State<CameraPage>
   final Signal<DeviceOrientation> _currentOrientation = signal(
     DeviceOrientation.portraitUp,
   );
+  // The orientation sensor flip-flops between two orientations when the phone is
+  // held near a tilt boundary. We wait for a new orientation to hold steady
+  // before committing it, so the shutter button (which stores a position per
+  // orientation) doesn't jump back and forth.
+  Timer? _orientationSettleTimer;
 
   // Exposure compensation variables
   double _exposureCompensation = 0.0;
@@ -189,6 +195,7 @@ class CameraPageState extends State<CameraPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     routeObserver.unsubscribe(this);
+    _orientationSettleTimer?.cancel();
     _wiggleController.dispose();
     volumeKeyDispatcher.unsubscribe(_handleVolumeKey);
     _overlayEffectDispose?.call();
@@ -443,6 +450,24 @@ class CameraPageState extends State<CameraPage>
     }
   }
 
+  // Commit a new orientation only once it has held steady briefly. The sensor
+  // rapidly flips between two orientations near a tilt boundary; if we applied
+  // every reading, the shutter button would jump between each orientation's
+  // saved position. While the readings keep flipping, the pending timer is
+  // cancelled and restarted, so nothing changes until they settle.
+  void _scheduleOrientationUpdate(DeviceOrientation orientation) {
+    if (_currentOrientation.value == orientation) {
+      // Already showing this one — drop any pending flip to the other.
+      _orientationSettleTimer?.cancel();
+      _orientationSettleTimer = null;
+      return;
+    }
+    _orientationSettleTimer?.cancel();
+    _orientationSettleTimer = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) _currentOrientation.value = orientation;
+    });
+  }
+
   void _onScaleStart(ScaleStartDetails details) {
     _zoomAtGestureStart = _currentZoom;
   }
@@ -684,13 +709,7 @@ class CameraPageState extends State<CameraPage>
                         context,
                       ).deviceOrientation ??
                       DeviceOrientation.portraitUp;
-                  // Defer the update a frame so we never mutate a signal that the
-                  // shutter button's Watch is reading in this same build pass.
-                  if (_currentOrientation.value != orientation) {
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (mounted) _currentOrientation.value = orientation;
-                    });
-                  }
+                  _scheduleOrientationUpdate(orientation);
                   return SizedBox.expand(
                     child: FittedBox(
                       // Show the whole frame (letterboxed) rather than cropping
