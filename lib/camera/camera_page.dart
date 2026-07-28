@@ -359,6 +359,17 @@ class CameraPageState extends State<CameraPage>
           // supports, so framing survives reconnects and restarts.
           _currentZoom = settingsManager.cameraZoom.clamp(_minZoom, _maxZoom);
           await newController.setZoomLevel(_currentZoom);
+
+          // Reapply the current exposure too. The slider's value lives in this
+          // page's state and survives a trip to the gallery, but the freshly
+          // opened controller starts at its default (0). Without this the UI
+          // would show the old exposure while the camera actually shot at 0.
+          _sliderExposureValue = _sliderExposureValue.clamp(
+            _minExposureCompensation,
+            _maxExposureCompensation,
+          );
+          _exposureCompensation = _sliderExposureValue;
+          await newController.setExposureOffset(_sliderExposureValue);
         }
 
         if (!mounted || !_isPageVisible) {
