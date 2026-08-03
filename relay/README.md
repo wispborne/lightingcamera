@@ -270,4 +270,6 @@ the page quietly falls back to the world view.
 `web/vendor/leaflet/` (copied from the `leaflet` npm devDependency) so the page loads
 without a CDN; map tiles come from CARTO's dark basemap (free for non-commercial use).
 Strikes draw on a single canvas overlay, so tens of thousands of worldwide strikes
-render without breaking a sweat. The thunder toggle persists in `localStorage`.
+render without breaking a sweat. The toggles (thunder, radar and its opacity, sound)
+persist in `localStorage`, as does the last good GPS fix (`lastLocation`) — a return
+visit opens on that area immediately, then re-centres when the live fix arrives.

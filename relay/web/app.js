@@ -426,8 +426,34 @@ connect();
 
 // ---------------------------------------------------------------------------
 // Visitor location: center on success, stay at the world view otherwise.
+// The last good fix is kept in local storage, so a return visit opens on the
+// same area straight away instead of the world view while the browser asks for
+// permission (which on some browsers means asking every time).
 
 const note = document.getElementById('note');
+
+const LAST_LOCATION_KEY = 'lastLocation';
+
+function loadLastLocation() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST_LOCATION_KEY));
+    if (!saved) return null;
+    const { lat, lon } = saved;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    return [lat, lon];
+  } catch {
+    return null; // missing or corrupt entry: fall back to the world view
+  }
+}
+
+function saveLastLocation(lat, lon) {
+  try {
+    localStorage.setItem(LAST_LOCATION_KEY, JSON.stringify({ lat, lon }));
+  } catch {
+    // Private-browsing modes can refuse writes; remembering is a nicety.
+  }
+}
 
 // A my_location-style crosshair (ring + center dot + ticks), like the app's marker.
 // Deliberately not a filled glowing dot — that's what strikes look like.
@@ -444,18 +470,38 @@ const youAreHereIcon = L.divIcon({
     '</svg>',
 });
 
+let youAreHereMarker = null;
+
+function showLocation(here) {
+  map.setView(here, REGIONAL_ZOOM);
+  if (youAreHereMarker) {
+    youAreHereMarker.setLatLng(here);
+  } else {
+    youAreHereMarker = L.marker(here, { icon: youAreHereIcon, interactive: false })
+      .addTo(map);
+  }
+}
+
+// Open on the remembered spot right away; a live fix replaces it moments later.
+const lastLocation = loadLastLocation();
+if (lastLocation) showLocation(lastLocation);
+
+function noLocation() {
+  note.textContent = lastLocation
+    ? 'Location unavailable — showing your last known area'
+    : 'Location unavailable — showing world view';
+}
+
 if (navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       const here = [pos.coords.latitude, pos.coords.longitude];
-      map.setView(here, REGIONAL_ZOOM);
-      L.marker(here, { icon: youAreHereIcon, interactive: false }).addTo(map);
+      showLocation(here);
+      saveLastLocation(here[0], here[1]);
     },
-    () => {
-      note.textContent = 'Location unavailable — showing world view';
-    },
+    noLocation,
     { enableHighAccuracy: false, timeout: 10000 },
   );
 } else {
-  note.textContent = 'Location unavailable — showing world view';
+  noLocation();
 }
