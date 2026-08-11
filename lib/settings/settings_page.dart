@@ -28,8 +28,10 @@ class _SettingsPageState extends State<SettingsPage> {
     _urlController = TextEditingController(
       text: settingsManager.customRelayUrl,
     );
+    // Only the key the user saved themselves — never the built-in fallback,
+    // which would otherwise get persisted as if the user had typed it.
     _keyController = TextEditingController(
-      text: settingsManager.relayKey,
+      text: settingsManager.savedRelayKey,
     );
   }
 
@@ -65,9 +67,11 @@ class _SettingsPageState extends State<SettingsPage> {
         ? LightningService.defaultRelayUrl
         : _urlController.text.trim();
 
+    // The effective key: what the user typed, or the built-in fallback when
+    // the field is empty. _saveKey() above already stored the typed value.
     final (success, message) = await LightningService.testConnection(
       url,
-      _keyController.text.trim(),
+      settingsManager.relayKey,
     );
 
     // Remember a URL the user typed that authenticated, for the suggestions
@@ -425,13 +429,33 @@ class _SettingsPageState extends State<SettingsPage> {
               title: const Text('Mini map opacity'),
               subtitle: Slider(
                 value: opacity,
-                min: 0.2,
-                max: 1.0,
+                min: SettingsManager.minMiniMapOpacity,
+                max: SettingsManager.maxMiniMapOpacity,
                 divisions: 8,
                 label: '${(opacity * 100).round()}%',
                 onChanged: enabled ? settingsManager.setMiniMapOpacity : null,
               ),
               trailing: Text('${(opacity * 100).round()}%'),
+            );
+          }),
+          SignalBuilder(builder: (context) {
+            final enabled = settingsManager.miniMapEnabledSignal.value;
+            final zoom = settingsManager.miniMapZoomSignal.value;
+            return ListTile(
+              enabled: enabled,
+              title: const Text('Mini map zoom'),
+              subtitle: Slider(
+                value: zoom,
+                min: SettingsManager.minMiniMapZoom,
+                max: SettingsManager.maxMiniMapZoom,
+                divisions:
+                    (SettingsManager.maxMiniMapZoom -
+                            SettingsManager.minMiniMapZoom)
+                        .round(),
+                label: zoom.round().toString(),
+                onChanged: enabled ? settingsManager.setMiniMapZoom : null,
+              ),
+              trailing: Text(zoom.round().toString()),
             );
           }),
 
@@ -543,7 +567,9 @@ class _SettingsPageState extends State<SettingsPage> {
               obscureText: _obscureKey,
               decoration: InputDecoration(
                 labelText: 'Relay key',
-                hintText: 'Key from whoever runs the relay',
+                hintText: settingsManager.hasBuiltInRelayKey
+                    ? 'Using the built-in key'
+                    : 'Key from whoever runs the relay',
                 border: const OutlineInputBorder(),
                 suffixIcon: IconButton(
                   icon: Icon(

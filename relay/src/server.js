@@ -16,6 +16,10 @@ import { WebSocketServer } from 'ws';
 import { clampRadiusKm, boxFromCenter, inBox } from './geo.js';
 import { makeAuthGate, trustedIp } from './auth.js';
 
+// Disconnect a client once this much outbound data is sitting unread in its
+// socket buffer — it isn't keeping up and the backlog only grows.
+const MAX_BUFFERED_BYTES = 1024 * 1024;
+
 // WebSocket close codes the app distinguishes. 4001 (bad key) and 4003 (banned)
 // tell the app NOT to reconnect; the others are transient and it retries.
 const CLOSE_AUTH_TIMEOUT = 4000;
@@ -158,9 +162,17 @@ export function startServer(config, log, subscribers, history) {
   function broadcast(strike) {
     const payload = JSON.stringify({ type: 'strike', ...strike });
     for (const socket of wss.clients) {
-      if (socket.readyState === socket.OPEN && socket.box && inBox(strike, socket.box)) {
-        socket.send(payload);
+      if (socket.readyState !== socket.OPEN || !socket.box || !inBox(strike, socket.box)) {
+        continue;
       }
+      // A client that reads slower than its feed would make us buffer for it
+      // without limit. Drop it — the app reconnects and re-seeds from history.
+      if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
+        log.debug(`"${socket.friendId}" too far behind; dropping it`);
+        socket.terminate();
+        continue;
+      }
+      socket.send(payload);
     }
   }
 

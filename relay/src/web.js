@@ -12,6 +12,10 @@ import { WebSocketServer } from 'ws';
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(here, '..', 'web');
 
+// Disconnect a viewer once this much outbound data is sitting unread in its
+// socket buffer — it isn't keeping up and the backlog only grows.
+const MAX_BUFFERED_BYTES = 1024 * 1024;
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -95,7 +99,16 @@ export function startWeb(config, log, subscribers, history) {
   function broadcast(strike) {
     const payload = JSON.stringify({ type: 'strike', ...strike });
     for (const socket of wss.clients) {
-      if (socket.readyState === socket.OPEN) socket.send(payload);
+      if (socket.readyState !== socket.OPEN) continue;
+      // A viewer that reads slower than the feed (throttled tab, bad link) would
+      // otherwise make us buffer the worldwide feed for it without limit. Drop
+      // it instead — the page reconnects and re-seeds from history.
+      if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
+        log.debug('web viewer too far behind; dropping it');
+        socket.terminate();
+        continue;
+      }
+      socket.send(payload);
     }
   }
 

@@ -320,7 +320,21 @@ class CameraPageState extends State<CameraPage>
       setState(() => _cameraInitFailed = false);
     }
 
-    _cameras = await availableCameras();
+    // Listing the cameras can fail too (or report none at all). Treat that the
+    // same as failed initialize attempts — show the retry button, not an
+    // endless spinner.
+    try {
+      _cameras = await availableCameras();
+      if (_cameras!.isEmpty) {
+        throw CameraException('noCameras', 'The device reported no cameras.');
+      }
+    } catch (e, st) {
+      Fimber.e('Could not list cameras: $e', ex: e, stacktrace: st);
+      if (mounted && _isPageVisible) {
+        setState(() => _cameraInitFailed = true);
+      }
+      return;
+    }
 
     CameraDescription? backCamera;
     for (final camera in _cameras!) {
@@ -359,6 +373,7 @@ class CameraPageState extends State<CameraPage>
           // supports, so framing survives reconnects and restarts.
           _currentZoom = settingsManager.cameraZoom.clamp(_minZoom, _maxZoom);
           await newController.setZoomLevel(_currentZoom);
+          _overlayController.setZoom(_currentZoom);
 
           // Reapply the current exposure too. The slider's value lives in this
           // page's state and survives a trip to the gallery, but the freshly
@@ -499,6 +514,7 @@ class CameraPageState extends State<CameraPage>
     final clamped = zoom.clamp(_minZoom, _maxZoom);
     if (clamped == _currentZoom) return;
     setState(() => _currentZoom = clamped);
+    _overlayController.setZoom(clamped);
     try {
       await controller!.setZoomLevel(clamped);
     } catch (e) {

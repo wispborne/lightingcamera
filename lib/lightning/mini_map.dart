@@ -10,7 +10,7 @@ import 'package:lightingcamera/settings/settings_manager.dart';
 
 /// A small, non-interactive lightning map shown in the top-left of the camera
 /// page. Centred on the user, it plots recent strikes the same way the full map
-/// does, at the opacity chosen in settings.
+/// does, at the zoom and opacity chosen in settings.
 ///
 /// Renders nothing until [MiniMapController] has a location fix. The parent is
 /// responsible for only mounting this when the mini map setting is on.
@@ -28,6 +28,23 @@ class MiniMap extends StatefulWidget {
 
 class _MiniMapState extends State<MiniMap> {
   final MapController _mapController = MapController();
+
+  /// The zoom the live map is currently showing. Set once the map is built, so
+  /// a later change in settings can be moved onto the existing map — flutter_map
+  /// only reads `initialZoom` when it first builds.
+  double? _appliedZoom;
+
+  /// Move the built map to [zoom] after this frame, if it isn't there already.
+  void _applyZoom(LatLng center, double zoom) {
+    if (_appliedZoom == zoom) return;
+    final wasBuilt = _appliedZoom != null;
+    _appliedZoom = zoom;
+    if (!wasBuilt) return; // first build uses initialZoom
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _mapController.move(center, zoom);
+    });
+  }
 
   @override
   void initState() {
@@ -95,9 +112,12 @@ class _MiniMapState extends State<MiniMap> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
-    return Watch((context) {
+    return SignalBuilder(builder: (context) {
       final center = widget.controller.userLocation.value;
       final opacity = settingsManager.miniMapOpacitySignal.value;
+      final zoom = settingsManager.miniMapZoomSignal.value;
+
+      if (center != null) _applyZoom(center, zoom);
 
       final content = center == null
           ? ColoredBox(
@@ -114,7 +134,7 @@ class _MiniMapState extends State<MiniMap> {
               mapController: _mapController,
               options: MapOptions(
                 initialCenter: center,
-                initialZoom: 7,
+                initialZoom: zoom,
                 // Static thumbnail: no panning, zooming, or rotation.
                 interactionOptions: const InteractionOptions(
                   flags: InteractiveFlag.none,
@@ -141,8 +161,8 @@ class _MiniMapState extends State<MiniMap> {
                     );
                   },
                 ),
-                Watch(
-                  (context) =>
+                SignalBuilder(
+                  builder: (context) =>
                       MarkerLayer(markers: _buildMarkers(center, colors)),
                 ),
               ],

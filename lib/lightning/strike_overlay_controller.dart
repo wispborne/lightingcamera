@@ -23,8 +23,24 @@ class StrikeOverlayController {
       signal(CameraFov.defaultHorizontalFovDegrees);
   ReadonlySignal<double> get horizontalFovDeg => _horizontalFovDeg;
 
+  /// Current zoom ratio of the camera preview, pushed in by the camera page.
+  /// The overlay narrows its projection to match — at 2× the visible field of
+  /// view is half as wide.
+  final Signal<double> _zoom = signal(1.0);
+  ReadonlySignal<double> get zoom => _zoom;
+
+  void setZoom(double zoom) {
+    if (zoom > 0) _zoom.value = zoom;
+  }
+
   bool _active = false;
   bool _acquired = false;
+
+  /// Counts calls to [start], so a start that was still waiting on its GPS fix
+  /// when a stop/start pair ran can tell it has been superseded. Without this,
+  /// both the old and new start would acquire the lightning connection, and the
+  /// single release in [stop] would leak one hold forever.
+  int _startEpoch = 0;
 
   /// Begin the overlay's work: orientation sensor, FOV query, GPS fix, and the
   /// shared lightning connection. Idempotent.
@@ -33,7 +49,7 @@ class StrikeOverlayController {
     _active = true;
     orientationService.start();
     _loadFov();
-    await _resolveAndConnect();
+    await _resolveAndConnect(++_startEpoch);
   }
 
   /// Stop all overlay work and release the lightning connection. Idempotent.
@@ -52,10 +68,11 @@ class StrikeOverlayController {
     if (_active) _horizontalFovDeg.value = fov;
   }
 
-  Future<void> _resolveAndConnect() async {
+  Future<void> _resolveAndConnect(int epoch) async {
     final center = await _resolveLocation();
-    // The user may have left or disabled the overlay while we awaited the fix.
-    if (!_active) return;
+    // The user may have left or disabled the overlay while we awaited the fix,
+    // or a newer start may have taken over.
+    if (!_active || epoch != _startEpoch) return;
     if (center == null) return; // no location → overlay stays hidden
     _userLocation.value = center;
     lightningService.acquire(center);

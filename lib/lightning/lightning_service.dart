@@ -291,7 +291,12 @@ class LightningService {
     if (_manualDisconnect || settingsManager.relayKey.isEmpty) return;
 
     _reconnectTimer?.cancel();
-    final delaySeconds = math.min(30, math.pow(2, _reconnectAttempts).toInt());
+    // Cap the exponent as well as the result: an uncapped power overflows to a
+    // negative int after enough attempts, which would make the delay zero.
+    final delaySeconds = math.min(
+      30,
+      math.pow(2, math.min(5, _reconnectAttempts)).toInt(),
+    );
     _reconnectAttempts++;
     Fimber.i('Reconnecting to lightning relay in ${delaySeconds}s');
 

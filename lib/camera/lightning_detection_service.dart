@@ -91,10 +91,23 @@ class LightningDetectionService {
   /// the labeler: while ML Kit processes frame N, frame N+1's bytes are
   /// already being packed in the conversion pool, so neither stage waits on
   /// the other. Safe to leave running — [reset] cancels it.
-  Future<void> scan(List<ImageWithMetadata> frames) async {
+  ///
+  /// With [keepResults] the recorded confidences survive and already-scanned
+  /// frames are skipped. The gallery uses this to resume after a deletion:
+  /// deleting cancels all queued pool work, which stops the running scan loop,
+  /// so the survivors that weren't scanned yet need a fresh one.
+  Future<void> scan(
+    List<ImageWithMetadata> frames, {
+    bool keepResults = false,
+  }) async {
     final gen = ++_generation;
-    confidences.clear();
-    _scannedCount.value = 0;
+    if (!keepResults) confidences.clear();
+    final toScan = keepResults
+        ? frames
+            .where((f) => !confidences.value.containsKey(f.sequenceNumber))
+            .toList()
+        : frames;
+    _scannedCount.value = frames.length - toScan.length;
     _totalCount.value = frames.length;
     final completer = Completer<void>();
     _scanCompleter = completer;
@@ -102,15 +115,15 @@ class LightningDetectionService {
     final labeler = _ensureLabeler();
 
     Future<_PreparedFrame>? pending;
-    for (int i = 0; i < frames.length; i++) {
+    for (int i = 0; i < toScan.length; i++) {
       if (gen != _generation) break;
-      final frame = frames[i];
+      final frame = toScan[i];
       final prepared = await (pending ?? _prepare(frame));
       if (gen != _generation) break;
       // Kick off the next frame's packing before the (slow) labeler call so
       // the two overlap. _prepare never throws, so abandoning this future on
       // break/reset leaks no unhandled error.
-      pending = i + 1 < frames.length ? _prepare(frames[i + 1]) : null;
+      pending = i + 1 < toScan.length ? _prepare(toScan[i + 1]) : null;
       if (prepared.cancelled) break;
 
       double confidence = 0.0;

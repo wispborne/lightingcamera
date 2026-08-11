@@ -113,13 +113,21 @@ class StrikeOverlay extends StatelessWidget {
           final originY = (screen.height - rectH) / 2;
           final size = Size(rectW, rectH);
 
-          // Vertical FOV follows the horizontal FOV and the frame's aspect.
-          final halfTanH = math.tan(hFov * math.pi / 180 / 2);
-          final vFov =
-              2 *
-              math.atan(halfTanH * size.height / size.width) *
-              180 /
-              math.pi;
+          // The platform reports the FOV along the sensor's long side at 1.0×
+          // zoom. On screen that side runs along the preview rectangle's LONG
+          // side — in portrait that's the vertical axis, not the width. Anchor
+          // the projection there, narrow it by the current zoom, and derive the
+          // short side from the rectangle's shape.
+          final zoom = controller.zoom.value;
+          final halfTanLong = math.tan(hFov * math.pi / 180 / 2) / zoom;
+          final longSide = math.max(size.width, size.height);
+          final shortSide = math.min(size.width, size.height);
+          final fovLong = 2 * math.atan(halfTanLong) * 180 / math.pi;
+          final fovShort =
+              2 * math.atan(halfTanLong * shortSide / longSide) * 180 / math.pi;
+          final isLandscape = size.width >= size.height;
+          final hFovOnScreen = isLandscape ? fovLong : fovShort;
+          final vFovOnScreen = isLandscape ? fovShort : fovLong;
 
           final children = <Widget>[];
 
@@ -127,8 +135,8 @@ class StrikeOverlay extends StatelessWidget {
             final placement = projectBearing(
               bearingDeg: c.bearing,
               deviceToWorld: matrix,
-              horizontalFovDeg: hFov,
-              verticalFovDeg: vFov,
+              horizontalFovDeg: hFovOnScreen,
+              verticalFovDeg: vFovOnScreen,
               screenSize: size,
             );
             if (placement != null) {
@@ -151,8 +159,8 @@ class StrikeOverlay extends StatelessWidget {
               user: user,
               strike: strike.position,
               deviceToWorld: matrix,
-              horizontalFovDeg: hFov,
-              verticalFovDeg: vFov,
+              horizontalFovDeg: hFovOnScreen,
+              verticalFovDeg: vFovOnScreen,
               screenSize: size,
             );
             if (placement == null) continue;

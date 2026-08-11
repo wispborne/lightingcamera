@@ -103,7 +103,11 @@ reconnect:
   backoffMs: 1000
   maxBackoffMs: 30000
   # How often (ms) to ping the upstream to keep it alive and spot a dead feed.
+  # A ping that gets no pong before the next one is due forces a reconnect.
   heartbeatMs: 30000
+  # Reconnect if no message arrives for this long (ms), even when pings are
+  # answered — the worldwide feed never goes quiet, so silence means it stalled.
+  silentMs: 120000
 
 # Logging verbosity: error | warn | info | debug.
 log:

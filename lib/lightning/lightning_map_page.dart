@@ -36,6 +36,10 @@ class _LightningMapPageState extends State<LightningMapPage> {
   Timer? _ticker;
   bool _locating = false;
 
+  /// Whether this page holds a ref-counted acquire on [lightningService], so
+  /// dispose only releases what was actually taken.
+  bool _acquiredLightning = false;
+
   @override
   void initState() {
     super.initState();
@@ -59,6 +63,7 @@ class _LightningMapPageState extends State<LightningMapPage> {
     final known = lightningService.lastCenter ?? _cachedCenter();
     if (known != null) {
       lightningService.acquire(known);
+      _acquiredLightning = true;
       return;
     }
 
@@ -70,6 +75,7 @@ class _LightningMapPageState extends State<LightningMapPage> {
     setState(() => _userLocation = center);
     _mapController.move(center, _defaultZoom);
     lightningService.acquire(center);
+    _acquiredLightning = true;
   }
 
   /// The last map center we persisted, or null if the map has never resolved a
@@ -128,7 +134,10 @@ class _LightningMapPageState extends State<LightningMapPage> {
   @override
   void dispose() {
     _ticker?.cancel();
-    lightningService.release();
+    // Only give back a hold we actually took. On a first run with no known
+    // location, closing the page before the GPS fix arrives means _init never
+    // acquired — releasing anyway would drop a hold some other page owns.
+    if (_acquiredLightning) lightningService.release();
     rainRadarService.release();
     _mapController.dispose();
     super.dispose();

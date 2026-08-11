@@ -27,6 +27,7 @@ class SettingsManager {
   static const _showStrikeInfoKey = 'show_strike_info';
   static const _miniMapEnabledKey = 'mini_map_enabled';
   static const _miniMapOpacityKey = 'mini_map_opacity';
+  static const _miniMapZoomKey = 'mini_map_zoom';
   static const _rainRadarEnabledKey = 'rain_radar_enabled';
   static const _customRelayUrlKey = 'custom_relay_url';
   static const _relayKeyKey = 'relay_key';
@@ -58,6 +59,17 @@ class SettingsManager {
   static const double minAlertCooldownMinutes = 1;
   static const double maxAlertCooldownMinutes = 30;
   static const double defaultAlertCooldownMinutes = 2;
+
+  /// Bounds for the mini map's zoom level. Higher means closer in: 5 covers a
+  /// few hundred kilometres, 11 covers roughly a city.
+  static const double minMiniMapZoom = 5;
+  static const double maxMiniMapZoom = 11;
+  static const double defaultMiniMapZoom = 8;
+
+  /// Bounds for the mini map's opacity.
+  static const double minMiniMapOpacity = 0.2;
+  static const double maxMiniMapOpacity = 1.0;
+  static const double defaultMiniMapOpacity = 0.75;
 
   /// Bounds for the overlay's maximum strike distance, in kilometres.
   static const double minStrikeDistanceKm = 5;
@@ -136,10 +148,17 @@ class SettingsManager {
   ReadonlySignal<bool> get miniMapEnabledSignal => _miniMapEnabled;
   bool get miniMapEnabled => _miniMapEnabled.value;
 
-  /// Opacity of the camera-page mini map, 0.2–1.0. Defaults to 0.8.
+  /// Opacity of the camera-page mini map, from [minMiniMapOpacity] to
+  /// [maxMiniMapOpacity].
   late final Signal<double> _miniMapOpacity;
   ReadonlySignal<double> get miniMapOpacitySignal => _miniMapOpacity;
   double get miniMapOpacity => _miniMapOpacity.value;
+
+  /// Zoom level of the camera-page mini map, from [minMiniMapZoom] to
+  /// [maxMiniMapZoom].
+  late final Signal<double> _miniMapZoom;
+  ReadonlySignal<double> get miniMapZoomSignal => _miniMapZoom;
+  double get miniMapZoom => _miniMapZoom.value;
 
   /// When on, both the lightning map and the camera mini map overlay the latest
   /// precipitation radar frame (from RainViewer's free public API). On by
@@ -165,6 +184,15 @@ class SettingsManager {
     if (saved.isNotEmpty) return saved;
     return const String.fromEnvironment('RELAY_KEY');
   }
+
+  /// The key the user saved themselves, without the built-in fallback. Use this
+  /// when showing or persisting the key, so the built-in key never gets written
+  /// to disk — a stale saved copy would outlive a rotated built-in key.
+  String get savedRelayKey => _relayKey.value;
+
+  /// Whether a key was baked in at build time with `--dart-define=RELAY_KEY`.
+  bool get hasBuiltInRelayKey =>
+      const String.fromEnvironment('RELAY_KEY').isNotEmpty;
 
   /// Relay URLs that have connected successfully, most-recent first (capped at
   /// [_maxRecentRelayUrls]). Surfaced as suggestions under the relay URL field.
@@ -306,10 +334,30 @@ class SettingsManager {
     );
     _showStrikeInfo = signal(prefs.getBool(_showStrikeInfoKey) ?? true);
     _miniMapEnabled = signal(prefs.getBool(_miniMapEnabledKey) ?? true);
-    _miniMapOpacity = signal(prefs.getDouble(_miniMapOpacityKey) ?? 0.4);
+    _miniMapOpacity = signal(
+      (prefs.getDouble(_miniMapOpacityKey) ?? defaultMiniMapOpacity).clamp(
+        minMiniMapOpacity,
+        maxMiniMapOpacity,
+      ),
+    );
+    _miniMapZoom = signal(
+      (prefs.getDouble(_miniMapZoomKey) ?? defaultMiniMapZoom).clamp(
+        minMiniMapZoom,
+        maxMiniMapZoom,
+      ),
+    );
     _rainRadarEnabled = signal(prefs.getBool(_rainRadarEnabledKey) ?? true);
     _customRelayUrl = signal(prefs.getString(_customRelayUrlKey) ?? '');
-    _relayKey = signal(prefs.getString(_relayKeyKey) ?? '');
+    // Older versions saved the built-in key to disk just by opening Settings.
+    // Drop such a copy — the getter falls back to the built-in key anyway, and
+    // a stale saved copy would win over a rotated one.
+    var savedRelayKey = prefs.getString(_relayKeyKey) ?? '';
+    if (savedRelayKey.isNotEmpty &&
+        savedRelayKey == const String.fromEnvironment('RELAY_KEY')) {
+      savedRelayKey = '';
+      await prefs.remove(_relayKeyKey);
+    }
+    _relayKey = signal(savedRelayKey);
     _recentRelayUrls = signal(
       prefs.getStringList(_recentRelayUrlsKey) ?? const [],
     );
@@ -426,9 +474,15 @@ class SettingsManager {
   }
 
   Future<void> setMiniMapOpacity(double opacity) async {
-    _miniMapOpacity.value = opacity.clamp(0.2, 1.0);
+    _miniMapOpacity.value = opacity.clamp(minMiniMapOpacity, maxMiniMapOpacity);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_miniMapOpacityKey, _miniMapOpacity.value);
+  }
+
+  Future<void> setMiniMapZoom(double zoom) async {
+    _miniMapZoom.value = zoom.clamp(minMiniMapZoom, maxMiniMapZoom);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_miniMapZoomKey, _miniMapZoom.value);
   }
 
   Future<void> setRainRadarEnabled(bool enabled) async {

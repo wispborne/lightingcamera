@@ -403,6 +403,11 @@ class _GalleryPageState extends State<GalleryPage> {
     if (images.isNotEmpty) {
       _generateThumbnails();
     }
+    // cancelPending() above also cancelled the running lightning scan's queued
+    // work, which stops its loop with the counters frozen mid-scan. Restart it
+    // over the survivors — frames already scanned keep their result and are
+    // skipped, and with everything deleted this just settles the counters.
+    lightningDetectionService.scan(images, keepResults: true);
   }
 
   Future<void> _saveAll() async {
@@ -985,16 +990,28 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
   final Map<int, ProcessedFrame> _fullRes = {};
   final Set<int> _converting = {};
 
+  /// How far from the current page a full-res frame may be before it's dropped.
+  static const _keepRadius = 2;
+
   @override
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex;
     _pageController = PageController(initialPage: widget.initialIndex);
+    // Claim the volume keys while this viewer is on top. Without a listener
+    // here, presses would fall through to the gallery's save-and-exit flow,
+    // which would clear the cache and pop this viewer instead of the gallery.
+    volumeKeyDispatcher.subscribe(_handleVolumeKey);
     _updateNeighborhood(widget.initialIndex);
   }
 
+  /// Volume presses do nothing in the fullscreen viewer; subscribing just stops
+  /// them reaching the gallery underneath.
+  void _handleVolumeKey() {}
+
   @override
   void dispose() {
+    volumeKeyDispatcher.unsubscribe(_handleVolumeKey);
     _pageController.dispose();
     for (final frame in _fullRes.values) {
       frame.dispose();
@@ -1009,8 +1026,7 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
     _ensureFullRes(index - 1);
     _ensureFullRes(index + 1);
 
-    const keepRadius = 2;
-    final stale = _fullRes.keys.where((k) => (k - index).abs() > keepRadius).toList();
+    final stale = _fullRes.keys.where((k) => (k - index).abs() > _keepRadius).toList();
     for (final k in stale) {
       _fullRes.remove(k)?.dispose();
     }
@@ -1032,11 +1048,20 @@ class _FullscreenImagePageState extends State<FullscreenImagePage> {
         priority: ConversionPriority.high,
       );
       if (!mounted) return;
+      // The user may have swiped far past this page while the conversion sat in
+      // the queue. The prune that bounds memory only runs on a page change and
+      // has already happened, so storing this frame now would keep it (and, in
+      // a fast fling, dozens like it) alive until the next swipe. Drop it.
+      if ((index - _currentIndex).abs() > _keepRadius) {
+        _converting.remove(index);
+        return;
+      }
       final processed = ProcessedFrame(result.bytes, result.width, result.height);
       await processed.uiImage;
       processed.releaseBytes();
-      if (!mounted) {
+      if (!mounted || (index - _currentIndex).abs() > _keepRadius) {
         processed.dispose();
+        _converting.remove(index);
         return;
       }
       setState(() {

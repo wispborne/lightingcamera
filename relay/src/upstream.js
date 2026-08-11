@@ -9,6 +9,10 @@ export function startUpstream(config, log, onStrike) {
   const { urls, initMessage } = config.upstream;
   const { backoffMs, maxBackoffMs, heartbeatMs } = config.reconnect;
 
+  // The worldwide feed never goes quiet for long, so a stretch this long with no
+  // messages means the feed is stalled even if the connection itself looks fine.
+  const silentMs = config.reconnect.silentMs ?? 120000;
+
   let urlIndex = 0;
   let backoff = backoffMs;
   let ws = null;
@@ -21,16 +25,39 @@ export function startUpstream(config, log, onStrike) {
     log.info(`upstream connecting to ${url}`);
     ws = new WebSocket(url);
 
+    // Liveness has two layers: a pong must answer each ping (catches a dead
+    // connection the TCP stack hasn't noticed), and messages must keep arriving
+    // (catches a healthy connection whose feed has stopped). Either failing
+    // terminates the socket, and the close handler reconnects on the next URL.
+    let alive = true;
+    let lastMessageAt = Date.now();
+    ws.on('pong', () => { alive = true; });
+
     ws.on('open', () => {
       log.info(`upstream connected to ${url}`);
       backoff = backoffMs; // reset backoff on a good connection
+      alive = true;
+      lastMessageAt = Date.now();
       ws.send(JSON.stringify(initMessage));
       heartbeat = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) ws.ping();
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!alive) {
+          log.warn('upstream stopped answering pings; reconnecting');
+          ws.terminate();
+          return;
+        }
+        if (Date.now() - lastMessageAt > silentMs) {
+          log.warn(`upstream sent nothing for ${silentMs}ms; reconnecting`);
+          ws.terminate();
+          return;
+        }
+        alive = false;
+        ws.ping();
       }, heartbeatMs);
     });
 
     ws.on('message', (data) => {
+      lastMessageAt = Date.now();
       const parsed = parseStrikeMessage(data.toString());
       const strike = parsed && normalizeStrike(parsed);
       if (strike) onStrike(strike);

@@ -20,14 +20,22 @@ class MiniMapController {
   bool _active = false;
   bool _acquired = false;
 
+  /// Counts calls to [start], so a start that was still waiting on its GPS fix
+  /// when a stop/start pair ran can tell it has been superseded. Without this,
+  /// both the old and new start would acquire the lightning connection, and the
+  /// single release in [stop] would leak one hold forever.
+  int _startEpoch = 0;
+
   /// Resolve the user's location and open the shared lightning connection.
   /// Idempotent.
   Future<void> start() async {
     if (_active) return;
     _active = true;
+    final epoch = ++_startEpoch;
     final center = await _resolveLocation();
-    // The user may have left or disabled the mini map while we awaited the fix.
-    if (!_active) return;
+    // The user may have left or disabled the mini map while we awaited the fix,
+    // or a newer start may have taken over.
+    if (!_active || epoch != _startEpoch) return;
     if (center == null) return; // no location → mini map stays hidden
     _userLocation.value = center;
     lightningService.acquire(center);

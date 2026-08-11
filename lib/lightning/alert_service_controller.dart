@@ -105,7 +105,10 @@ class AlertServiceController {
   /// a change takes effect without restarting it. No-op if not running.
   void notifySettingsChanged() {
     _service.invoke('settingsChanged', {
-      'relayKey': settingsManager.relayKey,
+      // The saved key only — the service isolate runs the same binary, so its
+      // own relayKey getter applies the built-in fallback. Sending the
+      // effective key would make the service persist the fallback to disk.
+      'relayKey': settingsManager.savedRelayKey,
       'relayUrl': settingsManager.customRelayUrl,
       'testMode': settingsManager.lightningTestMode,
       'radiusKm': settingsManager.alertRadiusKm,
