@@ -274,6 +274,36 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             );
           }),
+          SignalBuilder(builder: (context) {
+            final count = settingsManager.cacheFrameCountSignal.value;
+            return ListTile(
+              title: const Text('Photo buffer'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'How many frames the camera keeps in memory. More frames '
+                    'cover a longer stretch of time but use more memory — the '
+                    'camera view shows the seconds and megabytes this works '
+                    'out to.',
+                  ),
+                  Slider(
+                    value: count.toDouble(),
+                    min: SettingsManager.minCacheFrameCount.toDouble(),
+                    max: SettingsManager.maxCacheFrameCount.toDouble(),
+                    divisions:
+                        (SettingsManager.maxCacheFrameCount -
+                            SettingsManager.minCacheFrameCount) ~/
+                        25,
+                    label: '$count frames',
+                    onChanged: (value) =>
+                        settingsManager.setCacheFrameCount(value.round()),
+                  ),
+                ],
+              ),
+              trailing: Text('$count'),
+            );
+          }),
           SignalBuilder(
             builder: (context) => SwitchListTile(
               title: const Text('Tag photos with location'),

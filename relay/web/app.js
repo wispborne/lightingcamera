@@ -406,7 +406,9 @@ function connect() {
       pruneStrikes();
       redraw();
     } else if (msg.type === 'strike') {
-      strikes.push({ lat: msg.lat, lon: msg.lon, time: msg.time });
+      // Keep delay: the thunder rings advance by it, and backlog strikes carry
+      // it too — dropping it here would make a strike's ring jump on reload.
+      strikes.push({ lat: msg.lat, lon: msg.lon, time: msg.time, delay: msg.delay });
       maybeTick(msg);
     }
     // 'ping' and unknown types: keepalive only, nothing to do.

@@ -88,6 +88,16 @@ class CameraPageState extends State<CameraPage>
   double _currentZoom = 1.0;
   double _zoomAtGestureStart = 1.0;
 
+  // Tap-to-focus: where the brief focus ring is shown (screen coordinates),
+  // and the timer that hides it again.
+  Offset? _focusRingPosition;
+  Timer? _focusRingTimer;
+
+  // Short confirmation message ("Focus locked") shown after a toggle, and the
+  // timer that hides it again.
+  String? _toastMessage;
+  Timer? _toastTimer;
+
   // Wiggle animation for reposition mode
   late final AnimationController _wiggleController;
   // Live position (0..1 of the travel region) while a reposition drag is in
@@ -196,6 +206,8 @@ class CameraPageState extends State<CameraPage>
     WidgetsBinding.instance.removeObserver(this);
     routeObserver.unsubscribe(this);
     _orientationSettleTimer?.cancel();
+    _focusRingTimer?.cancel();
+    _toastTimer?.cancel();
     _wiggleController.dispose();
     volumeKeyDispatcher.unsubscribe(_handleVolumeKey);
     _overlayEffectDispose?.call();
@@ -385,6 +397,15 @@ class CameraPageState extends State<CameraPage>
           );
           _exposureCompensation = _sliderExposureValue;
           await newController.setExposureOffset(_sliderExposureValue);
+
+          // Hold focus by default: one autofocus pass now, then no hunting.
+          // Aimed at the sky that pass lands at the far end — effectively
+          // infinity, which is what lightning wants. (The camera plugin can't
+          // set a focus distance outright; locking after one pass is the
+          // closest it gets.)
+          if (settingsManager.focusLocked) {
+            await newController.setFocusMode(FocusMode.locked);
+          }
         }
 
         if (!mounted || !_isPageVisible) {
@@ -507,6 +528,89 @@ class CameraPageState extends State<CameraPage>
   void _onScaleEnd(ScaleEndDetails details) {
     // Remember the framing so the camera reopens here next time.
     settingsManager.setCameraZoom(_currentZoom);
+  }
+
+  /// The rectangle the letterboxed camera image occupies on screen, or null if
+  /// the preview isn't ready. Same box math as the build method.
+  Rect? _previewRectOnScreen(Size screen) {
+    final c = controller;
+    if (c == null || !c.value.isInitialized || c.value.previewSize == null) {
+      return null;
+    }
+    final previewSize = c.value.previewSize!;
+    final landscape =
+        c.value.deviceOrientation == DeviceOrientation.landscapeLeft ||
+        c.value.deviceOrientation == DeviceOrientation.landscapeRight;
+    final boxWidth = landscape ? previewSize.width : previewSize.height;
+    final boxHeight = landscape ? previewSize.height : previewSize.width;
+    final aspect = boxWidth / boxHeight;
+    final screenAspect = screen.width / screen.height;
+    final double width, height;
+    if (aspect > screenAspect) {
+      width = screen.width;
+      height = screen.width / aspect;
+    } else {
+      height = screen.height;
+      width = screen.height * aspect;
+    }
+    return Rect.fromLTWH(
+      (screen.width - width) / 2,
+      (screen.height - height) / 2,
+      width,
+      height,
+    );
+  }
+
+  /// Focus and meter where the user tapped. With focus held this runs one
+  /// autofocus pass at the spot and holds it there; otherwise it behaves like
+  /// a stock camera's tap-to-focus.
+  Future<void> _focusAtTap(Offset position) async {
+    final c = controller;
+    if (c == null || !c.value.isInitialized) return;
+    final rect = _previewRectOnScreen(MediaQuery.of(context).size);
+    if (rect == null || !rect.contains(position)) return;
+
+    setState(() => _focusRingPosition = position);
+    _focusRingTimer?.cancel();
+    _focusRingTimer = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() => _focusRingPosition = null);
+    });
+
+    final point = Offset(
+      ((position.dx - rect.left) / rect.width).clamp(0.0, 1.0),
+      ((position.dy - rect.top) / rect.height).clamp(0.0, 1.0),
+    );
+    try {
+      await c.setFocusPoint(point);
+      await c.setExposurePoint(point);
+    } catch (e) {
+      Fimber.e('Error setting focus point: $e', ex: e);
+    }
+  }
+
+  /// Show a short confirmation pill near the bottom of the screen saying what
+  /// a toggle just did. A new message replaces one still showing.
+  void _showToast(String message) {
+    _toastTimer?.cancel();
+    setState(() => _toastMessage = message);
+    _toastTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _toastMessage = null);
+    });
+  }
+
+  /// Switch between held focus (one pass, then fixed) and continuous autofocus,
+  /// remembering the choice for the next launch.
+  Future<void> _toggleFocusLock() async {
+    final locked = !settingsManager.focusLocked;
+    settingsManager.setFocusLocked(locked);
+    _showToast(locked ? 'Focus locked' : 'Autofocus enabled');
+    final c = controller;
+    if (c == null || !c.value.isInitialized) return;
+    try {
+      await c.setFocusMode(locked ? FocusMode.locked : FocusMode.auto);
+    } catch (e) {
+      Fimber.e('Error setting focus mode: $e', ex: e);
+    }
   }
 
   Future<void> _setZoom(double zoom) async {
@@ -752,17 +856,35 @@ class CameraPageState extends State<CameraPage>
                   );
                 },
               ),
-              // Pinch anywhere on the feed to zoom. Sits above the preview but
-              // below the overlay and the on-screen controls, so the strike
-              // markers, shutter, and buttons keep their own gestures.
+              // Pinch anywhere on the feed to zoom, tap to focus and meter
+              // there. Sits above the preview but below the overlay and the
+              // on-screen controls, so the strike markers, shutter, and
+              // buttons keep their own gestures.
               Positioned.fill(
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onScaleStart: _onScaleStart,
                   onScaleUpdate: _onScaleUpdate,
                   onScaleEnd: _onScaleEnd,
+                  onTapUp: (details) => _focusAtTap(details.localPosition),
                 ),
               ),
+              // Brief ring where a tap set the focus point.
+              if (_focusRingPosition != null)
+                Positioned(
+                  left: _focusRingPosition!.dx - 24,
+                  top: _focusRingPosition!.dy - 24,
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.amber, width: 2),
+                      ),
+                    ),
+                  ),
+                ),
               Positioned.fill(
                 child: StrikeOverlay(
                   controller: _overlayController,
@@ -906,7 +1028,10 @@ class CameraPageState extends State<CameraPage>
                 child: Watch((context) {
                   final on = settingsManager.strikeOverlayEnabledSignal.value;
                   return GestureDetector(
-                    onTap: () => settingsManager.setStrikeOverlayEnabled(!on),
+                    onTap: () {
+                      settingsManager.setStrikeOverlayEnabled(!on);
+                      _showToast(on ? 'Strike overlay off' : 'Strike overlay on');
+                    },
                     child: Container(
                       width: 40,
                       height: 40,
@@ -925,6 +1050,31 @@ class CameraPageState extends State<CameraPage>
                   );
                 }),
               ),
+              // Focus hold toggle: amber lock = focus is held (the default),
+              // open lock = continuous autofocus.
+              Positioned(
+                top: topInset + 152,
+                right: 8,
+                child: SignalBuilder(builder: (context) {
+                  final locked = settingsManager.focusLockedSignal.value;
+                  return GestureDetector(
+                    onTap: _toggleFocusLock,
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.5),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        locked ? Icons.lock : Icons.lock_open,
+                        color: locked ? Colors.amber : Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                  );
+                }),
+              ),
               Positioned(
                 bottom: 140,
                 right: 16,
@@ -936,6 +1086,32 @@ class CameraPageState extends State<CameraPage>
                 right: 0,
                 child: Center(child: _buildZoomIndicator()),
               ),
+              // Confirmation pill for toggles ("Focus locked"), above the zoom
+              // pill so the two never overlap.
+              if (_toastMessage != null)
+                Positioned(
+                  bottom: 208,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: IgnorePointer(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.5),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          _toastMessage!,
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           );
         } else if (_cameraInitFailed) {

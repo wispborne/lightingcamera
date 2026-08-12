@@ -40,6 +40,8 @@ class SettingsManager {
   static const _skipGalleryExitWarningKey = 'skip_gallery_exit_warning';
   static const _captureAspectKey = 'capture_aspect';
   static const _cameraZoomKey = 'camera_zoom';
+  static const _cacheFrameCountKey = 'cache_frame_count';
+  static const _focusLockedKey = 'focus_locked';
   static const _unitSystemKey = 'unit_system';
   static const _maxStrikeDistanceKmKey = 'max_strike_distance_km';
   static const _lightningThresholdKey = 'lightning_confidence_threshold';
@@ -59,6 +61,13 @@ class SettingsManager {
   static const double minAlertCooldownMinutes = 1;
   static const double maxAlertCooldownMinutes = 30;
   static const double defaultAlertCooldownMinutes = 2;
+
+  /// Bounds for how many frames the rolling camera buffer keeps. More frames
+  /// cover a longer stretch of time but cost memory — roughly 3 MB per 1080p
+  /// frame, so 200 frames is around 600 MB.
+  static const int minCacheFrameCount = 25;
+  static const int maxCacheFrameCount = 200;
+  static const int defaultCacheFrameCount = 100;
 
   /// Bounds for the mini map's zoom level. Higher means closer in: 5 covers a
   /// few hundred kilometres, 11 covers roughly a city.
@@ -234,6 +243,21 @@ class SettingsManager {
   ReadonlySignal<double> get cameraZoomSignal => _cameraZoom;
   double get cameraZoom => _cameraZoom.value;
 
+  /// How many frames the rolling camera buffer keeps, from
+  /// [minCacheFrameCount] to [maxCacheFrameCount].
+  late final Signal<int> _cacheFrameCount;
+  ReadonlySignal<int> get cacheFrameCountSignal => _cacheFrameCount;
+  int get cacheFrameCount => _cacheFrameCount.value;
+
+  /// When on (the default), the camera does one autofocus pass when it
+  /// connects and then holds that focus, instead of continuously refocusing.
+  /// Pointed at the sky the pass lands at the far end, which is what lightning
+  /// wants — and the lens never hunts mid-storm. Tapping the preview refocuses
+  /// once at the tapped spot and holds again.
+  late final Signal<bool> _focusLocked;
+  ReadonlySignal<bool> get focusLockedSignal => _focusLocked;
+  bool get focusLocked => _focusLocked.value;
+
   /// Which measurement system distances are shown in. Defaults to
   /// [UnitSystem.system], which follows the device locale.
   late final Signal<UnitSystem> _unitSystem;
@@ -381,6 +405,13 @@ class SettingsManager {
       ),
     );
     _cameraZoom = signal(prefs.getDouble(_cameraZoomKey) ?? 1.0);
+    _cacheFrameCount = signal(
+      (prefs.getInt(_cacheFrameCountKey) ?? defaultCacheFrameCount).clamp(
+        minCacheFrameCount,
+        maxCacheFrameCount,
+      ),
+    );
+    _focusLocked = signal(prefs.getBool(_focusLockedKey) ?? true);
     final unitName = prefs.getString(_unitSystemKey);
     _unitSystem = signal(
       UnitSystem.values.firstWhere(
@@ -428,6 +459,21 @@ class SettingsManager {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_shutterOffsetXKeyFor(orientation), clamped.dx);
     await prefs.setDouble(_shutterOffsetYKeyFor(orientation), clamped.dy);
+  }
+
+  Future<void> setCacheFrameCount(int count) async {
+    _cacheFrameCount.value = count.clamp(
+      minCacheFrameCount,
+      maxCacheFrameCount,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_cacheFrameCountKey, _cacheFrameCount.value);
+  }
+
+  Future<void> setFocusLocked(bool locked) async {
+    _focusLocked.value = locked;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_focusLockedKey, locked);
   }
 
   Future<void> setCameraZoom(double zoom) async {

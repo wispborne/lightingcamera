@@ -2,6 +2,8 @@ import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
 import 'package:signals/signals.dart';
 
+import 'package:lightingcamera/settings/settings_manager.dart';
+
 class ImageWithMetadata {
   final CameraImage image;
   final DateTime timestamp;
@@ -30,8 +32,11 @@ final imageCacheManager = ImageCacheManager();
 
 class ImageCacheManager {
   final _cachedImages = listSignal<ImageWithMetadata>([]);
-  final int _maxCacheSize = 100;
   int _sequenceCounter = 0;
+
+  /// The user's buffer-length setting. Read per add, so lowering it mid-session
+  /// shrinks the cache as the next frames arrive.
+  int get _maxCacheSize => settingsManager.cacheFrameCount;
 
   late final cacheSize = computed(() => _cachedImages.value.length);
 

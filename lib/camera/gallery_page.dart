@@ -37,12 +37,40 @@ class _GalleryPageState extends State<GalleryPage> {
   final Set<int> _selected = {};
   bool _selectionMode = false;
 
-  static const int _minCrossAxisCount = 2;
-  static const int _maxCrossAxisCount = 8;
-  static const int _portraitDefault = 3;
-  static const int _landscapeDefault = 6;
+  // The saved grid size is a column count measured across the screen's SHORT
+  // side — that is, how many columns you'd see in portrait. The columns actually
+  // drawn are worked out from that and the width on screen right now, so a tile
+  // stays the same size when the phone is rotated. Storing the drawn count
+  // instead would make landscape tiles about twice as big, since landscape is
+  // about twice as wide.
+  static const int _minShortSideColumns = 2;
+  static const int _maxShortSideColumns = 8;
+  static const int _defaultShortSideColumns = 3;
+
+  /// Bounds on the columns actually drawn, after widening for landscape.
+  static const int _maxDrawnColumns = 16;
+
   final Map<int, Offset> _pointers = {};
   double? _initialPinchDistance;
+
+  /// The saved column count, or the default when the user has never pinched.
+  int get _shortSideColumns =>
+      (settingsManager.galleryCrossAxisCount ?? _defaultShortSideColumns).clamp(
+        _minShortSideColumns,
+        _maxShortSideColumns,
+      );
+
+  /// How many columns to draw at [width], keeping each tile the size that
+  /// [_shortSideColumns] gives across the screen's short side.
+  int _columnsFor(double width) {
+    final shortSide = MediaQuery.of(context).size.shortestSide;
+    if (shortSide <= 0 || width <= 0) return _shortSideColumns;
+    final tileSize = shortSide / _shortSideColumns;
+    return (width / tileSize).round().clamp(
+      _minShortSideColumns,
+      _maxDrawnColumns,
+    );
+  }
 
   // One busy flag covers both "Save all" and "Save lightning" so the two can
   // never run at once.
@@ -197,12 +225,11 @@ class _GalleryPageState extends State<GalleryPage> {
             ? const Center(
                 child: Text('No images to display', style: TextStyle(color: Colors.white)),
               )
-            : OrientationBuilder(
-                builder: (context, orientation) {
-                  final crossAxisCount =
-                      (settingsManager.galleryCrossAxisCount ??
-                              (orientation == Orientation.landscape ? _landscapeDefault : _portraitDefault))
-                          .clamp(_minCrossAxisCount, _maxCrossAxisCount);
+            : LayoutBuilder(
+                builder: (context, constraints) {
+                  // The grid sits inside 2dp of padding on each side.
+                  final crossAxisCount = _columnsFor(constraints.maxWidth - 4);
+                  final saved = _shortSideColumns;
 
                   return Listener(
                     onPointerDown: (e) {
@@ -216,12 +243,15 @@ class _GalleryPageState extends State<GalleryPage> {
                       if (_pointers.length == 2 && _initialPinchDistance != null) {
                         final dist = _currentPinchDistance();
                         final ratio = dist / _initialPinchDistance!;
-                        if (ratio > 1.5 && crossAxisCount > _minCrossAxisCount) {
-                          settingsManager.setGalleryCrossAxisCount(crossAxisCount - 1);
+                        // Each pinch step moves the saved short-side count, not
+                        // the count drawn on screen, so one step changes the
+                        // tile size by the same amount in either orientation.
+                        if (ratio > 1.5 && saved > _minShortSideColumns) {
+                          settingsManager.setGalleryCrossAxisCount(saved - 1);
                           setState(() {});
                           _initialPinchDistance = dist;
-                        } else if (ratio < 0.65 && crossAxisCount < _maxCrossAxisCount) {
-                          settingsManager.setGalleryCrossAxisCount(crossAxisCount + 1);
+                        } else if (ratio < 0.65 && saved < _maxShortSideColumns) {
+                          settingsManager.setGalleryCrossAxisCount(saved + 1);
                           setState(() {});
                           _initialPinchDistance = dist;
                         }

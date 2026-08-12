@@ -426,8 +426,8 @@ class StrikeOverlay extends StatelessWidget {
     );
   }
 
-  // Age styling mirrors the lightning map: fresh strikes are red/opaque, older
-  // ones shift toward blue and fade out over the service's display window.
+  // Age styling mirrors the lightning map: fresh strikes are blue/opaque, older
+  // ones shift toward red and fade out over the service's display window.
   double _opacityForAge(DateTime time) {
     final age = DateTime.now().difference(time);
     final fraction =
@@ -435,7 +435,7 @@ class StrikeOverlay extends StatelessWidget {
     return fraction.clamp(0.15, 1.0);
   }
 
-  // Hue encodes strike age (red = fresh → blue = old) and must stay legible
+  // Hue encodes strike age (blue = fresh → red = old) and must stay legible
   // over arbitrary camera frames, so it is intentionally not theme-colored.
   Color _colorForAge(DateTime time) {
     final age = DateTime.now().difference(time);
