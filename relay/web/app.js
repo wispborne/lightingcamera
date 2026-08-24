@@ -427,25 +427,82 @@ function connect() {
 connect();
 
 // ---------------------------------------------------------------------------
-// Visitor location: center on success, stay at the world view otherwise.
-// The last good fix is kept in local storage, so a return visit opens on the
-// same area straight away instead of the world view while the browser asks for
-// permission (which on some browsers means asking every time).
+// Where the map opens: whatever you were last looking at.
+// Every pan and zoom is written to the address bar (?lat=&lon=&z=) and to local
+// storage, so a reload — now or days later — opens on the same spot instead of
+// the world view, and the link can be copied to send someone that exact view.
+// A view in the address bar wins over the stored one. The browser's own location
+// is only used to place the crosshair marker, and to pick the opening view on a
+// first visit when there is nothing remembered yet.
 
 const note = document.getElementById('note');
 
-const LAST_LOCATION_KEY = 'lastLocation';
+const LAST_VIEW_KEY = 'lastView';
+const LAST_LOCATION_KEY = 'lastLocation'; // older key: position only, no zoom
 
-function loadLastLocation() {
+function validLatLon(lat, lon) {
+  return (
+    Number.isFinite(lat) && Number.isFinite(lon) &&
+    Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+  );
+}
+
+// Enough decimals to place the centre within about a metre; zoom snaps to halves.
+function roundCoord(deg) { return Number(deg.toFixed(5)); }
+function roundZoom(z) { return Number(z.toFixed(1)); }
+
+function loadViewFromUrl() {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('lat') || !params.has('lon')) return null;
+  const lat = Number(params.get('lat'));
+  const lon = Number(params.get('lon'));
+  if (!validLatLon(lat, lon)) return null;
+  const zoom = Number(params.get('z'));
+  return {
+    center: [lat, lon],
+    zoom: Number.isFinite(zoom) ? zoom : REGIONAL_ZOOM,
+  };
+}
+
+function writeViewToUrl(lat, lon, zoom) {
+  const params = new URLSearchParams(location.search);
+  params.set('lat', String(roundCoord(lat)));
+  params.set('lon', String(roundCoord(lon)));
+  params.set('z', String(roundZoom(zoom)));
+  // replaceState, not pushState: panning shouldn't fill up the back button.
+  history.replaceState(null, '', `${location.pathname}?${params}${location.hash}`);
+}
+
+function loadStoredView() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST_VIEW_KEY));
+    if (saved && validLatLon(saved.lat, saved.lon) && Number.isFinite(saved.zoom)) {
+      return { center: [saved.lat, saved.lon], zoom: saved.zoom };
+    }
+  } catch {
+    // Missing or corrupt entry: try the older key below.
+  }
   try {
     const saved = JSON.parse(localStorage.getItem(LAST_LOCATION_KEY));
-    if (!saved) return null;
-    const { lat, lon } = saved;
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
-    return [lat, lon];
+    if (saved && validLatLon(saved.lat, saved.lon)) {
+      return { center: [saved.lat, saved.lon], zoom: REGIONAL_ZOOM };
+    }
   } catch {
-    return null; // missing or corrupt entry: fall back to the world view
+    // Nothing usable: fall back to the world view.
+  }
+  return null;
+}
+
+function saveCurrentView() {
+  const center = map.getCenter();
+  const lat = center.lat;
+  const lon = L.Util.wrapNum(center.lng, [-180, 180], true);
+  const zoom = map.getZoom();
+  writeViewToUrl(lat, lon, zoom);
+  try {
+    localStorage.setItem(LAST_VIEW_KEY, JSON.stringify({ lat, lon, zoom }));
+  } catch {
+    // Private-browsing modes can refuse writes; remembering is a nicety.
   }
 }
 
@@ -453,7 +510,7 @@ function saveLastLocation(lat, lon) {
   try {
     localStorage.setItem(LAST_LOCATION_KEY, JSON.stringify({ lat, lon }));
   } catch {
-    // Private-browsing modes can refuse writes; remembering is a nicety.
+    // Same as above — a failed write just means we forget.
   }
 }
 
@@ -474,8 +531,7 @@ const youAreHereIcon = L.divIcon({
 
 let youAreHereMarker = null;
 
-function showLocation(here) {
-  map.setView(here, REGIONAL_ZOOM);
+function markLocation(here) {
   if (youAreHereMarker) {
     youAreHereMarker.setLatLng(here);
   } else {
@@ -484,13 +540,20 @@ function showLocation(here) {
   }
 }
 
-// Open on the remembered spot right away; a live fix replaces it moments later.
-const lastLocation = loadLastLocation();
-if (lastLocation) showLocation(lastLocation);
+// Open on the requested or remembered view right away, before anything else can
+// move the map. A shared link beats whatever this browser had stored.
+const lastView = loadViewFromUrl() || loadStoredView();
+if (lastView) map.setView(lastView.center, lastView.zoom);
+
+// Record every view change from here on, including the ones we make ourselves.
+map.on('moveend zoomend', saveCurrentView);
+// Phones often kill a backgrounded tab outright, which skips a pending write.
+window.addEventListener('pagehide', saveCurrentView);
+saveCurrentView();
 
 function noLocation() {
-  note.textContent = lastLocation
-    ? 'Location unavailable — showing your last known area'
+  note.textContent = lastView
+    ? 'Location unavailable — showing your last view'
     : 'Location unavailable — showing world view';
 }
 
@@ -498,8 +561,11 @@ if (navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       const here = [pos.coords.latitude, pos.coords.longitude];
-      showLocation(here);
+      markLocation(here);
       saveLastLocation(here[0], here[1]);
+      // Only take over the view when there was nothing to restore, so a live fix
+      // never yanks you away from the area you left the map on.
+      if (!lastView) map.setView(here, REGIONAL_ZOOM);
     },
     noLocation,
     { enableHighAccuracy: false, timeout: 10000 },
