@@ -42,6 +42,16 @@ web:
   port: 8788
   # Ping cadence for web sockets, same semantics as server.heartbeatMs.
   heartbeatMs: 30000
+  # Basemap the map page draws strikes on. The default is OpenStreetMap's own
+  # tile server, which needs no key and anyone can use at this scale. Point `url`
+  # at your own tile server if you run one, and set `dark: true` when its tiles
+  # are already dark — the page inverts light tiles in CSS to get a dark map, and
+  # inverting an already-dark basemap ruins it.
+  tiles:
+    url: https://tile.openstreetmap.org/{z}/{x}/{y}.png
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    dark: false
+    maxZoom: 19
 
 # Rolling history of recent strikes, replayed to clients on connect so their maps
 # start populated: app clients get their bounding box after subscribing, web

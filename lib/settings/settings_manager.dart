@@ -32,6 +32,7 @@ class SettingsManager {
   static const _customRelayUrlKey = 'custom_relay_url';
   static const _relayKeyKey = 'relay_key';
   static const _recentRelayUrlsKey = 'recent_relay_urls';
+  static const _tileUrlKey = 'tile_url';
 
   /// How many recent relay URLs we remember for the field's suggestion dropdown.
   static const _maxRecentRelayUrls = 5;
@@ -202,6 +203,33 @@ class SettingsManager {
   /// Whether a key was baked in at build time with `--dart-define=RELAY_KEY`.
   bool get hasBuiltInRelayKey =>
       const String.fromEnvironment('RELAY_KEY').isNotEmpty;
+
+  /// Basemap tiles. OpenStreetMap's own server needs no key and anyone can use
+  /// it at this scale, so it is what the app ships with. A self-hosted tile
+  /// server can replace it — set here, or baked in at build time with
+  /// `--dart-define=TILE_URL=...` so the address never has to live in the repo.
+  static const defaultTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+  late final Signal<String> _tileUrl;
+  ReadonlySignal<String> get tileUrlSignal => _tileUrl;
+
+  /// The template to actually draw with: what the user saved, else the built-in
+  /// one, else OpenStreetMap.
+  String get tileUrl {
+    final saved = _tileUrl.value;
+    if (saved.isNotEmpty) return saved;
+    const builtIn = String.fromEnvironment('TILE_URL');
+    return builtIn.isNotEmpty ? builtIn : defaultTileUrl;
+  }
+
+  /// What the user saved, without either fallback. Use this when showing or
+  /// persisting the value, so a built-in URL never gets written to disk and a
+  /// stale copy can't outlive a changed build.
+  String get savedTileUrl => _tileUrl.value;
+
+  /// Whether a tile server was baked in with `--dart-define=TILE_URL`.
+  bool get hasBuiltInTileUrl =>
+      const String.fromEnvironment('TILE_URL').isNotEmpty;
 
   /// Relay URLs that have connected successfully, most-recent first (capped at
   /// [_maxRecentRelayUrls]). Surfaced as suggestions under the relay URL field.
@@ -385,6 +413,7 @@ class SettingsManager {
     _recentRelayUrls = signal(
       prefs.getStringList(_recentRelayUrlsKey) ?? const [],
     );
+    _tileUrl = signal(prefs.getString(_tileUrlKey) ?? '');
     _cacheInfoCollapsed = signal(
       prefs.getBool(_cacheInfoCollapsedKey) ?? false,
     );
@@ -547,6 +576,12 @@ class SettingsManager {
     _relayKey.value = key;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_relayKeyKey, key);
+  }
+
+  Future<void> setTileUrl(String url) async {
+    _tileUrl.value = url;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tileUrlKey, url);
   }
 
   /// Record a relay URL that connected successfully, moving it to the front of

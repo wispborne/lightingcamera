@@ -21,6 +21,14 @@ html, body {
   background: #0b0c0f;
 }
 
+/* OpenStreetMap only publishes a light basemap, so invert it. Greyscale first: a
+   plain invert turns blue water orange, and the strike and radar colours read best
+   over neutral grey anyway. Applied to the base layer's container only (see the
+   `className` on the tile layer in app.js) so the radar overlay keeps its colours. */
+.basemap-tiles {
+  filter: grayscale(1) invert(1) brightness(0.6) contrast(0.85);
+}
+
 .pill {
   position: absolute;
   z-index: 1000;

@@ -17,6 +17,7 @@ class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _urlController;
   late final TextEditingController _keyController;
   final FocusNode _urlFocusNode = FocusNode();
+  late final TextEditingController _tileUrlController;
   bool _obscureKey = true;
   bool _testing = false;
   String? _testResultMessage;
@@ -33,14 +34,21 @@ class _SettingsPageState extends State<SettingsPage> {
     _keyController = TextEditingController(
       text: settingsManager.savedRelayKey,
     );
+    // Only what the user saved — never a URL baked in at build time, which
+    // would otherwise get persisted as if the user had typed it.
+    _tileUrlController = TextEditingController(
+      text: settingsManager.savedTileUrl,
+    );
   }
 
   @override
   void dispose() {
     _saveUrl();
     _saveKey();
+    _saveTileUrl();
     _urlController.dispose();
     _keyController.dispose();
+    _tileUrlController.dispose();
     _urlFocusNode.dispose();
     super.dispose();
   }
@@ -53,6 +61,10 @@ class _SettingsPageState extends State<SettingsPage> {
   void _saveKey() {
     settingsManager.setRelayKey(_keyController.text.trim());
     alertServiceController.notifySettingsChanged();
+  }
+
+  void _saveTileUrl() {
+    settingsManager.setTileUrl(_tileUrlController.text.trim());
   }
 
   Future<void> _testConnection() async {
@@ -676,6 +688,34 @@ class _SettingsPageState extends State<SettingsPage> {
                 settingsManager.setLightningTestMode(value);
                 alertServiceController.notifySettingsChanged();
               },
+            ),
+          ),
+          _sectionHeader('Map'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: TextField(
+              controller: _tileUrlController,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              decoration: InputDecoration(
+                labelText: 'Map tile server',
+                hintText: settingsManager.hasBuiltInTileUrl
+                    ? 'Using the built-in tile server'
+                    : 'https://example.com/{z}/{x}/{y}.png',
+                border: const OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => _saveTileUrl(),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Text(
+              'Leave empty for OpenStreetMap. A private tile server usually '
+              'only works on your own network or VPN, so the map falls back to '
+              'OpenStreetMap when it cannot be reached.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
             ),
           ),
           const SizedBox(height: 16),

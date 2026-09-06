@@ -24,6 +24,21 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
+// Tile settings the page reads before building the map. Served as a script
+// rather than baked into app.js so a deployment's own tile server stays in
+// config.yaml, which is gitignored — the checked-in default is OpenStreetMap, so
+// a fresh clone works with no configuration.
+function serveConfig(config, res) {
+  const tiles = config.web?.tiles ?? {};
+  const body = `window.MAP_CONFIG = ${JSON.stringify({ tiles })};
+`;
+  res.writeHead(200, {
+    'Content-Type': MIME['.js'],
+    'Cache-Control': 'no-cache',
+  });
+  res.end(body);
+}
+
 function serveStatic(req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405).end();
@@ -53,7 +68,14 @@ export function startWeb(config, log, subscribers, history) {
   const { host, port } = config.web;
   const heartbeatMs = config.web.heartbeatMs ?? 30000;
 
-  const http = createServer(serveStatic);
+  const http = createServer((req, res) => {
+    // Generated, so it never matches a file in web/ and must be handled first.
+    if (new URL(req.url, 'http://x').pathname === '/config.js') {
+      serveConfig(config, res);
+      return;
+    }
+    serveStatic(req, res);
+  });
   const wss = new WebSocketServer({ server: http, path: '/ws' });
 
   wss.on('connection', (socket) => {

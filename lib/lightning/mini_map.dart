@@ -5,6 +5,7 @@ import 'package:signals/signals_flutter.dart';
 
 import 'package:lightingcamera/lightning/lightning_service.dart';
 import 'package:lightingcamera/lightning/mini_map_controller.dart';
+import 'package:lightingcamera/lightning/basemap_layer.dart';
 import 'package:lightingcamera/lightning/rain_radar_service.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
 
@@ -141,10 +142,7 @@ class _MiniMapState extends State<MiniMap> {
                 ),
               ),
               children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.wisp.lightingcamera',
-                ),
+                const BasemapLayer(),
                 // Same radar layer as the full map, under the strike markers.
                 // The thumbnail's own opacity (below) applies on top of this.
                 SignalBuilder(

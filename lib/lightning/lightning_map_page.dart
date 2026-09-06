@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:signals/signals_flutter.dart';
 
 import 'package:lightingcamera/lightning/lightning_service.dart';
+import 'package:lightingcamera/lightning/basemap_layer.dart';
 import 'package:lightingcamera/lightning/rain_radar_service.dart';
 import 'package:lightingcamera/main.dart';
 import 'package:lightingcamera/settings/settings_manager.dart';
@@ -382,10 +383,7 @@ class _LightningMapPageState extends State<LightningMapPage> {
               ),
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.wisp.lightingcamera',
-              ),
+              const BasemapLayer(),
               // Rain radar sits above the base map but below the strikes, so the
               // lightning markers stay crisp on top. Hidden (null template) when
               // the setting is off or no fresh frame is available.

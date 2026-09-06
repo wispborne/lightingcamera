@@ -19,7 +19,9 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     await settingsManager.init();
 
-    await tester.pumpWidget(const MyApp());
+    // '/' is the camera route; MyApp takes the start route explicitly so a
+    // notification tap can boot straight to the map instead.
+    await tester.pumpWidget(const MyApp(initialLocation: '/'));
     await tester.pump();
 
     // The app booted into MyApp's router and the camera page is showing its

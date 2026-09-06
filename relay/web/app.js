@@ -40,12 +40,31 @@ const map = L.map('map', {
   zoomControl: false,
 });
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+// Basemap. The tile source comes from the relay's config (served as /config.js), so a
+// deployment can point at its own tile server without that address living in the repo.
+// These defaults apply when /config.js is missing or incomplete, and are what anyone
+// running this from a fresh clone gets: OpenStreetMap's own tiles, which need no key.
+// Avoid a company's free basemap here — CARTO used to fill this slot until it started
+// stamping "API KEY REQUIRED" across every tile of its free service.
+const DEFAULT_TILES = {
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
   attribution:
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
-    '&copy; <a href="https://carto.com/attributions">CARTO</a> ' +
-    '&middot; lightning by <a href="https://www.blitzortung.org/">Blitzortung</a>',
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  dark: false,
   maxZoom: 19,
+};
+const tiles = { ...DEFAULT_TILES, ...(window.MAP_CONFIG?.tiles ?? {}) };
+
+// A light basemap gets inverted to dark in CSS; one that is already dark is left
+// alone, since inverting it would undo the styling. The class goes on this layer's
+// own container so the filter misses the rain radar — a separate tile layer in the
+// same pane, whose colours must stay as RainViewer drew them.
+L.tileLayer(tiles.url, {
+  className: tiles.dark ? '' : 'basemap-tiles',
+  attribution:
+    `${tiles.attribution} ` +
+    '&middot; lightning by <a href="https://www.blitzortung.org/">Blitzortung</a>',
+  maxZoom: tiles.maxZoom,
 }).addTo(map);
 
 // ---------------------------------------------------------------------------
@@ -258,7 +277,7 @@ async function refreshRadar() {
         // every zoom level (Leaflet's layer default is 18, which would drop the
         // rain layer at the closest zooms). Mirrors the app map, where the radar
         // tile layer has no upper zoom cap.
-        maxZoom: 19,
+        maxZoom: tiles.maxZoom,
         attribution:
           'Radar &copy; <a href="https://www.rainviewer.com/">RainViewer</a>',
       }).addTo(map);

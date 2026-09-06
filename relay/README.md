@@ -268,7 +268,13 @@ the page quietly falls back to the world view.
 
 `web/` is plain HTML/JS/CSS with no build step. Leaflet is vendored under
 `web/vendor/leaflet/` (copied from the `leaflet` npm devDependency) so the page loads
-without a CDN; map tiles come from CARTO's dark basemap (free for non-commercial use).
+without a CDN. Map tiles are configurable under `web.tiles` in `config.yaml`, served to
+the page as `/config.js` so a deployment's own tile server never has to live in the repo;
+the shipped default is OpenStreetMap's own server, which needs no key. A light basemap is
+inverted to dark in CSS (`.basemap-tiles` in `style.css`), scoped to the base layer so the
+radar keeps its colours — set `dark: true` for a basemap that is already dark and the page
+leaves it alone. Avoid a company's free basemap here: CARTO's used to fill this slot until
+it started stamping "API KEY REQUIRED" across every tile.
 Strikes draw on a single canvas overlay, so tens of thousands of worldwide strikes
 render without breaking a sweat. The toggles (thunder, radar and its opacity, sound)
 persist in `localStorage`, as does the last good GPS fix (`lastLocation`) — a return
